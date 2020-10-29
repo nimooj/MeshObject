@@ -460,14 +460,33 @@ bool mjLandmark::HasSegment(int idx) {
 	return false;
 }
 
-// ToDo::m_Level 수준의 convex hull의 둘레 길이를 구한다
 float mjLandmark::CalcSize() {
-	for (mjVertex *vert : *m_Human->m_Vertices) {
-		if (HasSegment(vert->m_Segment)) {
+	float distance = 0;
 
+	switch (m_Type) {
+	case  Girth :
+		// plane과 mesh의 교차점들의 길이
+
+
+		break;
+
+	case Length :  
+		// ToDo::손끝은 lowerJoint가 없어서 포함안될듯 ?
+		// segment의 upper joint ~ lower joint 거리
+		for (int boneIdx : m_SegmentIdx) {
+			mjBone *thisBone = (*m_Human->m_Skeleton->m_Bones)[boneIdx];
+			distance += dist(*thisBone->m_UpperJoint->m_Coord, *thisBone->m_LowerJoint->m_Coord);
 		}
+		m_Value = distance;
+
+		break;
+
+	default : 
+		break;
 	}
-	return 0;
+
+
+	return m_Value;
 }
 
 void mjLandmark::Deform(float nval, float upperBound, float lowerBound) {
@@ -482,11 +501,14 @@ void mjLandmark::Deform(float nval, float upperBound, float lowerBound) {
 		DeformGirthType(nval, upperBound, lowerBound);
 		break;
 	}
+
+	m_Value = CalcSize();
 }
 
 void mjLandmark::DeformLengthType(float nval) {	
-	std::cout << "Length type deformation... \n";
+	std::cout << "Length type deformation... " << std::endl;
 	float scale = nval / m_Value;
+	std::cout << "Curr value : " << m_Value << ", Modifying to " << nval << std::endl;
 	std::cout << "scale is " << scale << std::endl;
 
 	for (int boneIdx : m_SegmentIdx) {
@@ -495,33 +517,23 @@ void mjLandmark::DeformLengthType(float nval) {
 		mjJoint *upperJoint = thisBone->m_UpperJoint;
 		mjJoint *lowerJoint = thisBone->m_LowerJoint;
 
+		std::cout << upperJoint->m_Idx << " " << lowerJoint->m_Idx << std::endl;
+
 		mjVec3 deformVec; 
 		deformVec.m_Pos->x = scale * (lowerJoint->m_Coord->x - upperJoint->m_Coord->x);
 		deformVec.m_Pos->y = scale * (lowerJoint->m_Coord->y - upperJoint->m_Coord->y);
-		// deformVec.m_Pos->z = scale * (lowerJoint->m_Coord->z - upperJoint->m_Coord->z);
-
 		
 		for (mjVertex* v : *thisBone->m_VertList) {
 			// upperJoint를 원점으로 이동
-			/*
-			v->m_Coord->x -= upperJoint->m_Coord->x;
-			v->m_Coord->y -= upperJoint->m_Coord->y;
-			v->m_Coord->z -= upperJoint->m_Coord->z;
-			*/
 
 			// Scale
 			v->m_Coord->x += deformVec.m_Pos->x;
 			v->m_Coord->y += deformVec.m_Pos->y;
-			// v->m_Coord->z = deformVec.m_Pos->z;
-
-			// 다시 본래 위치로 복귀
-			/*
-			v->m_Coord->x += upperJoint->m_Coord->x;
-			v->m_Coord->y += upperJoint->m_Coord->y;
-			v->m_Coord->z += upperJoint->m_Coord->z;
-			*/
 		}
+		lowerJoint->m_Coord->x = deformVec.m_Pos->x;
+		lowerJoint->m_Coord->y = deformVec.m_Pos->y;
 	}
+
 }
 
 void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound) {
@@ -558,6 +570,7 @@ void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound)
 			}
 		}
 	}
+
 }
 
 
@@ -1352,7 +1365,8 @@ bool HumanObject::AssignWeight() {
 }
 
 bool HumanObject::SetSegment() {
-	std::cout << "Setting Segments... ";
+	std::cout << "Setting Segments... " << std::endl;
+
 	// 각 Bone에 가까운 점들로 Segment를 구성한다
 	for (mjVertex *v : *m_Vertices) {
 		int closestBoneIdx = -1;
@@ -1370,12 +1384,15 @@ bool HumanObject::SetSegment() {
 			}
 		}
 
+
+
 		if (closestBoneIdx != -1) {
 			m_Segment[closestBoneIdx].push_back(v);
 			v->m_Segment = closestBoneIdx;
 		}
 		else {
-			assert("No closest bone found fot vertex %d!!", v->m_Idx);
+			// assert("No closest bone found for vertex %d!!\n", v->m_Idx);
+			std::cout << "No closest bone found for vertex " << v->m_Idx << " !!\n" << std::endl;
 			return false;
 		}
 	}
@@ -1861,7 +1878,9 @@ void HumanObject::SetSize(int i, float value) {
 			thisLandmark->SetSegment(Bone_upperArm1R);
 			thisLandmark->SetSegment(Bone_lowerArmR);
 			thisLandmark->SetSegment(Bone_lowerArm1R);
+			/*
 			thisLandmark->SetSegment(Bone_lowerArm2R);
+			*/
 		}
 		if (i == ArmLengthL && thisLandmark->GetSegments().empty()) {
 			thisLandmark->SetSegment(Bone_upperArmL);

@@ -240,7 +240,7 @@ public:
 	float m_Level; 
 	float m_Value;
 
-	std::vector<int> m_SegmentIdx;
+	std::vector<int> m_SegmentIdx; // Bone ±‚¡ÿ¿« segment
 	std::vector<int> m_VertIdx;
 
 
