@@ -1,6 +1,6 @@
 #pragma once
 
-#define Joint_Num 34
+#define Joint_Num 36
 
 #define Joint_neck 0
 #define Joint_shoulderMid 1
@@ -36,4 +36,7 @@
 #define Joint_hipTwistR 31
 #define Joint_hipL 32
 #define Joint_hipTwistL 33
+
+#define Joint_handR 34
+#define Joint_handL 35
 

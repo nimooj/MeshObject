@@ -17,7 +17,8 @@
 #include <sstream>
 #include <iostream>
 #include <map>
-
+#include <tuple>
+#include <algorithm>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -36,6 +37,7 @@
 
 
 class mjVertex;
+class mjTexel;
 class mjNormal;
 class mjEdge;
 class mjFace; // Tri face
@@ -59,7 +61,7 @@ public:
 	int m_Idx;
 
 	mjPos3 *m_Coord;
-	mjPos2 *m_Texel;
+	mjTexel *m_Texel;
 	mjNormal *m_Normal;
 
 	int m_Segment;
@@ -67,6 +69,19 @@ public:
 	mjVertex(float x = 0.0f, float y = 0.0f, float z = 0.0f);
 	mjVertex(const mjVertex& cpy);
 	~mjVertex();
+
+	bool In(std::vector<mjVertex*> seg);
+};
+
+class mjTexel {
+public: 
+	int m_Idx;
+	mjPos2 *m_Coord;
+
+public: 
+	mjTexel(float u = 0.0f, float v = 0.0f);
+	mjTexel(const mjTexel& cpy);
+	~mjTexel();
 };
 
 
@@ -113,7 +128,7 @@ public:
 	std::vector<mjVertex *> *m_Verts;
 
 	// textures
-	std::vector<mjPos2 *> *m_Texels;
+	std::vector<mjTexel *> *m_Texels;
 
 	// face normals
 	std::vector<mjNormal *> *m_Normals;
@@ -126,12 +141,12 @@ public:
 	//////////////////// Constructor & Deconstructor
 	mjFace(
 		mjVertex *v0, mjVertex *v1, mjVertex *v2,
-		mjPos2 *t0, mjPos2 *t1, mjPos2 *t2,
+		mjTexel *t0, mjTexel *t1, mjTexel *t2,
 		mjNormal *n0, mjNormal *n1, mjNormal * n2
 	);
 	mjFace(
 		mjVertex *v0, mjVertex *v1, mjVertex *v2,
-		mjPos2 *t0, mjPos2 *t1, mjPos2 *t2,
+		mjTexel *t0, mjTexel *t1, mjTexel *t2,
 		mjNormal *n0, mjNormal *n1, mjNormal * n2,
 		mjMaterial *mtl,
 		std::string group
@@ -145,6 +160,15 @@ public:
 	mjVertex* GetVert(int idx);
 	mjPos3* GetVertPos(int idx);
 	int GetVertIdx(int idx);
+
+
+	mjTexel* GetTex(int idx);
+	mjPos2* GetTexPos(int idx);
+	int GetTexIdx(int idx);
+
+	mjNormal *GetNorm(int idx);
+	mjVec3* GetNormDir(int idx);
+	int GetNormIdx(int idx);
 };
 
 
@@ -178,7 +202,7 @@ public:
 
 	int m_Idx;
 	int m_ChildNum;
-	mjLine3 *m_Bone;
+	mjLine *m_Bone;
 	float m_Length;
 
 	mjJoint *m_UpperJoint = NULL, *m_LowerJoint = NULL;
@@ -235,13 +259,14 @@ public:
 	// tmp construction for now (20. 8. 22)
 	int m_Idx;
 
-	const char* m_Name;
+	std::string m_Name;
 	int m_Type;
 	float m_Level; 
 	float m_Value;
 
 	std::vector<int> m_SegmentIdx; // Bone 기준의 segment
-	std::vector<int> m_VertIdx;
+	// std::vector<int> m_VertIdx;
+	std::vector<mjPos3> m_RelatedPos;
 
 
 public:
@@ -252,8 +277,8 @@ public:
 
 	int GetIndex();
 	int GetIndex(char *lname);
-	const char* GetName();
-	const char* GetName(int idx);
+	std::string GetName();
+	std::string GetName(int idx);
 	std::vector<int> GetSegments();
 	float GetSize();
 
@@ -268,7 +293,7 @@ public:
 
 class mjTexture {
 public:
-	mjTexture(int id, std::string fname);
+	mjTexture(int id, char* fname);
 	~mjTexture();
 
 	void LoadTexture();
@@ -276,7 +301,7 @@ public:
 public:
 	std::string m_Filename;
 
-    unsigned int m_Idx;
+    unsigned int m_Id;
     int m_Width;
     int m_Height;
     int m_Channels;
@@ -353,7 +378,9 @@ public:
 
 public:
 	/////// Member variables
-	const char *fname;
+	std::string filepath;
+	std::string filename;
+	std::string mtlFilename;
 
 	int m_Gender;
 	int m_RenderType;
@@ -363,7 +390,7 @@ public:
 	mjBoundingBox *m_BoundingBox;
 
 	std::vector<mjVertex *> *m_Vertices;
-	std::vector<mjPos2 *> *m_Texels;
+	std::vector<mjTexel *> *m_Texels;
 	std::vector<mjNormal *> *m_Normals;
 
 	std::vector<mjEdge *> *m_Edges;
@@ -384,7 +411,6 @@ public:
 	// std::vector<float> m_NormBuf;
 	
 
-
 	mjSkeleton *m_Skeleton;
 
 	std::vector<mjLandmark *> *m_Landmarks;
@@ -403,7 +429,7 @@ public:
 
 
 	void AddVertex(mjVertex *v);
-	void AddTexel(mjPos2 *t);
+	void AddTexel(mjTexel *t);
 	void AddNormal(mjNormal *n);
 
 	void AddEdge(mjVertex *v0, mjVertex *v1);
@@ -445,8 +471,6 @@ public:
 	mjTexture* GetTexture(std::string fname);
 
 
-
-
 	/////// Measure 
 	// 측정항목 개수
 	int GetLandmarkNum();
@@ -484,6 +508,17 @@ public:
 	void GetIndices(int *node);
 
 	/////// Bounding / Collision
+	// 지정된 이름의 파트번호
+	int GetSegmentNum(char* name);
+	// i번째 부위의 시작점 좌표
+	void GetSegmentOrigin(int i, float* coord);
+	// i번째 부위의 종점 좌표
+	void GetSegmentTermination(int i, float* coord);
+	// i번째 부위에 속한 vertex들의 indices
+	void GetSegmentVertIndices(int i, int* nums);
+	// i번째 부위에 속한 vertex들의 좌표들
+	void GetSegmentVertPos(int i, float* coord);
+
 
 	/////// Pose
 	void SetTPose(int s);

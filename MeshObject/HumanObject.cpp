@@ -1,6 +1,16 @@
 #include "pch.h"
 #include "HumanObject.h"
 
+#define Height 0
+#define Bust 1
+#define Waist 2
+#define Hip 3
+#define ArmLengthR 4
+#define ArmLengthL 5
+#define LegLengthR 6
+#define LegLengthL 7
+#define ShoulderLength 8
+
 float dist(mjPos3 &a, mjPos3 &b) {
 	return sqrt(pow(a.x - b.x , 2) + pow(a.y - b.y, 2) + pow(a.z - b.z, 2));
 }
@@ -29,6 +39,58 @@ float distToLineSegment(mjPos3 &p, mjPos3 &v, mjPos3 &w) {
 	return dist(p, projection);
 }
 
+bool get_intersection(mjPlane &pln, mjPos3 &p, mjPos3 &q, mjPos3 &intersection) {
+	mjLine l = mjLine(p, q);
+
+	float dot1 = (pln.m_Normal * l.m_Dir).sum();
+	float dot2 = (pln.m_Normal * l.m_Pos).sum();
+
+	float t = -(dot2 + pln.d) / dot1;
+
+	if (t >= 0.0 && t <= 1.0) {
+		intersection = mjPos3(l.m_Pos + (t * l.m_Dir));
+		return true;
+	}
+
+	return false;
+}
+
+// @param[in] pln
+// @param[in] p0, p1, p2
+// @param[out] intersections
+bool intersect_plane_mesh(mjPlane &pln, mjPos3 &p0, mjPos3 &p1, mjPos3 &p2, std::vector<mjPos3> &intersections) {
+	if (pln.IsAbove(p0) && pln.IsAbove(p1) && pln.IsAbove(p2))
+		return false;
+	if (pln.IsBelow(p0) && pln.IsBelow(p1) && pln.IsBelow(p2))
+		return false;
+
+	mjPos3 intersection;
+	// p0 ~ p1
+	if ((pln.IsAbove(p0) && pln.IsBelow(p1)) || 
+		(pln.IsBelow(p0) && pln.IsAbove(p1))) {
+		if (get_intersection(pln, p0, p1, intersection)) {
+			intersections.push_back(intersection);
+		}
+	}
+
+	// p1 ~ p2
+	if ((pln.IsAbove(p1) && pln.IsBelow(p2)) || 
+		(pln.IsBelow(p1) && pln.IsAbove(p2))) {
+		if (get_intersection(pln, p0, p1, intersection)) {
+			intersections.push_back(intersection);
+		}
+	}
+
+	// p2 ~ p0
+	if ((pln.IsAbove(p2) && pln.IsBelow(p0)) || 
+		(pln.IsBelow(p2) && pln.IsAbove(p0))) {
+		if (get_intersection(pln, p0, p2, intersection)) {
+			intersections.push_back(intersection);
+		}
+	}
+
+	return true;
+}
 
 //////////////////////////////////////////////////////////////////////////////////
 //	 								mjVertex									// 
@@ -41,7 +103,7 @@ mjVertex::mjVertex(float x, float y, float z) {
 	m_Coord->y = y;
 	m_Coord->z = z;
 
-	m_Texel = new mjPos2();
+	m_Texel = new mjTexel();
 	m_Normal = new mjNormal();
 }
 
@@ -56,6 +118,31 @@ mjVertex::~mjVertex() {
 
 }
 
+bool mjVertex::In(std::vector<mjVertex*> seg) {
+	for (mjVertex* v : seg) {
+		if (this == v)
+			return true;
+	}
+	return false;
+}
+
+//////////////////////////////////////////////////////////////////////////////////
+//	 								mjTexel										// 
+//////////////////////////////////////////////////////////////////////////////////
+
+mjTexel::mjTexel(float u, float v) {
+	m_Idx = 0;
+	m_Coord = new mjPos2(u, v);
+}
+
+mjTexel::mjTexel(const mjTexel& cpy) {
+	m_Idx = cpy.m_Idx;
+	m_Coord = cpy.m_Coord;
+}
+
+mjTexel::~mjTexel() {
+	delete m_Coord;
+}
 
 //////////////////////////////////////////////////////////////////////////////////
 //	 								mjNormal									// 
@@ -105,10 +192,10 @@ mjEdge::~mjEdge() {
 //////////////////////////////////////////////////////////////////////////////////
 mjFace::mjFace(
 		mjVertex *v0, mjVertex *v1, mjVertex *v2,
-		mjPos2 *t0, mjPos2 *t1, mjPos2 *t2,
+		mjTexel *t0, mjTexel *t1, mjTexel *t2,
 		mjNormal *n0, mjNormal *n1, mjNormal * n2) {
 	m_Verts = new std::vector<mjVertex*>();
-	m_Texels = new std::vector<mjPos2*>();
+	m_Texels = new std::vector<mjTexel*>();
 	m_Normals = new std::vector<mjNormal *>();
 	m_Edges = new std::vector<mjEdge*>();
 
@@ -157,7 +244,7 @@ mjFace::mjFace(
 
 mjFace::mjFace(
 		mjVertex *v0, mjVertex *v1, mjVertex *v2,
-		mjPos2 *t0, mjPos2 *t1, mjPos2 *t2,
+		mjTexel *t0, mjTexel *t1, mjTexel *t2,
 		mjNormal *n0, mjNormal *n1, mjNormal * n2,
 		mjMaterial *mtl, std::string group
 	) {
@@ -165,7 +252,7 @@ mjFace::mjFace(
 	m_Group = group;
 
 	m_Verts = new std::vector<mjVertex*>();
-	m_Texels = new std::vector<mjPos2*>();
+	m_Texels = new std::vector<mjTexel*>();
 	m_Normals = new std::vector<mjNormal *>();
 	m_Edges = new std::vector<mjEdge*>();
 
@@ -236,6 +323,30 @@ int mjFace::GetVertIdx(int idx) {
 	return (*m_Verts)[idx]->m_Idx;
 }
 
+mjTexel* mjFace::GetTex(int idx) {
+	return (*m_Texels)[idx];
+}
+
+mjPos2* mjFace::GetTexPos(int idx) {
+	return (*m_Texels)[idx]->m_Coord;
+}
+
+int mjFace::GetTexIdx(int idx) {
+	return (*m_Texels)[idx]->m_Idx;
+}
+
+mjNormal* mjFace::GetNorm(int idx) {
+	return (*m_Normals)[idx];
+}
+
+mjVec3* mjFace::GetNormDir(int idx) {
+	return (*m_Normals)[idx]->m_Dir;
+}
+
+int mjFace::GetNormIdx(int idx) {
+	return (*m_Normals)[idx]->m_Idx;
+}
+
 
 //////////////////////////////////////////////////////////////////////////////////
 //	 								 mjJoint									// 
@@ -280,7 +391,7 @@ mjBone::mjBone() {
 	m_Children = new std::vector<mjBone *>();
 
 	m_Length = 0;
-	m_Bone = new mjLine3();
+	m_Bone = new mjLine();
 
 	m_UpperJoint = new mjJoint();
 	m_LowerJoint = new mjJoint();
@@ -297,7 +408,7 @@ mjBone::mjBone(mjJoint *upper, mjJoint *lower) {
 	isLeaf = false;
 	m_Idx = 0;
 
-	m_Bone = new mjLine3(create_Vec3(upper->m_Coord, lower->m_Coord), upper->m_Coord);
+	m_Bone = new mjLine(*create_Vec3(upper->m_Coord, lower->m_Coord), *upper->m_Coord);
 	m_Length = dist(*upper->m_Coord, *lower->m_Coord);
 
 	m_ChildNum = 0;
@@ -436,11 +547,11 @@ int mjLandmark::GetIndex(char *lname) {
 	return m_Idx;
 }
 
-const char* mjLandmark::GetName() {
+std::string mjLandmark::GetName() {
 	return m_Name;
 }
 
-const char* mjLandmark::GetName(int idx) {
+std::string mjLandmark::GetName(int idx) {
 	return m_Name;
 }
 
@@ -460,17 +571,102 @@ bool mjLandmark::HasSegment(int idx) {
 	return false;
 }
 
+bool sortByPosAngle(std::tuple<float, mjPos3> a, std::tuple<float, mjPos3> b) {
+	return std::get<0>(a) < std::get<0>(b);
+}
+
 float mjLandmark::CalcSize() {
+	mjPos3 centerPos = mjPos3(0, 0, 0);
+	std::vector<mjPos3> circPos;
 	float distance = 0;
 
-	switch (m_Type) {
-	case  Girth :
+	if (m_Type == Girth) {
 		// plane과 mesh의 교차점들의 길이
+		mjPlane pln = mjPlane(mjPos3(0, m_Level, 0), mjPos3(10, m_Level, 0), mjPos3(0, m_Level, -10));
 
+		for (mjFace *f : (*m_Human->m_Faces)) {
+			// Only when all vertices are in the Landmark Segments
+			mjVertex* v0 = f->GetVert(0);
+			mjVertex* v1 = f->GetVert(1);
+			mjVertex* v2 = f->GetVert(2);
 
-		break;
+			// Check if all verts exist in the segment
+			bool allIn = false;
+			for (int i = 0; i < m_SegmentIdx.size(); i++) {
+				if (v0->In(m_Human->m_Segment[i]) || v1->In(m_Human->m_Segment[i]) || v2->In(m_Human->m_Segment[i])) {
+					allIn = true;
+				}
+			}
 
-	case Length :  
+			if (!allIn)
+				continue;
+
+			mjPos3 p0 = (*f->GetVertPos(0));
+			mjPos3 p1 = (*f->GetVertPos(1));
+			mjPos3 p2 = (*f->GetVertPos(2));
+			// mjPlane pln = mjPlane(p0, p1, p2);
+
+			std::vector<mjPos3> intersections;
+			if (intersect_plane_mesh(pln, p0, p1, p2, intersections)) {
+				circPos.insert(circPos.end(), intersections.begin(), intersections.end());
+			}
+		}
+
+		if (circPos.empty()) {
+			printf("\nNo intersections!\n");
+			return m_Value;
+		}
+
+		// centerPos 기준으로 centerPos ~ p, centerPos의 x축 방향이랑 이루는 각도를 오름차순 정렬
+		printf("\nintersections size: %d\n", circPos.size());
+		for (mjPos3 p : circPos) {
+			printf("%f %f %f\n", p.x, p.y, p.z);
+
+			centerPos.x += p.x;
+			centerPos.y += p.y;
+			centerPos.z += p.z;
+		}
+		centerPos.x /= circPos.size();
+		centerPos.y /= circPos.size();
+		centerPos.z /= circPos.size();
+
+		mjPos3 centerPos_x = centerPos;
+		centerPos_x.x += 1.0;
+		mjVec3 m = centerPos_x - centerPos;
+
+		std::vector<std::tuple<float, mjPos3>> alignedCirc;
+		for (mjPos3 p : circPos) {
+			mjVec3 l = p - centerPos;
+
+			mjVec3 dotProduct = l * m;
+			float dotSum = dotProduct.x + dotProduct.y + dotProduct.z;
+
+			float angle = (dotSum / (l.length() * m.length())) * 180 / M_PI;
+
+			alignedCirc.push_back(std::make_tuple(angle, p));
+		}
+
+		// 오름차순 정렬
+		std::sort(alignedCirc.begin(), alignedCirc.end(), sortByPosAngle);
+
+		// distance로 거리 구하기
+		float girth = 0;
+		printf("\n=========================================================\nAligned circ : ");
+		m_RelatedPos.push_back(std::get<1>(alignedCirc[0]));
+		for (int i = 1; i < alignedCirc.size(); i++) {
+			float angle = std::get<0>(alignedCirc[i]);
+			mjPos3 p = std::get<1>(alignedCirc[i]);
+			// printf("%f : %f %f %f\n", angle, p.x, p.y, p.z);
+			girth += dist(std::get<1>(alignedCirc[i]), std::get<1>(alignedCirc[i - 1]));
+			m_RelatedPos.push_back(std::get<1>(alignedCirc[i]));
+		}
+		girth += dist(std::get<1>(alignedCirc[0]), std::get<1>(alignedCirc[alignedCirc.size() - 1]));
+		printf("New circ: %f\n", girth);
+		printf("=========================================================\n");
+
+		m_Value = girth;
+	}
+	else if (m_Type == Length) {
 		// ToDo::손끝은 lowerJoint가 없어서 포함안될듯 ?
 		// segment의 upper joint ~ lower joint 거리
 		for (int boneIdx : m_SegmentIdx) {
@@ -478,11 +674,6 @@ float mjLandmark::CalcSize() {
 			distance += dist(*thisBone->m_UpperJoint->m_Coord, *thisBone->m_LowerJoint->m_Coord);
 		}
 		m_Value = distance;
-
-		break;
-
-	default : 
-		break;
 	}
 
 
@@ -527,11 +718,13 @@ void mjLandmark::DeformLengthType(float nval) {
 			// upperJoint를 원점으로 이동
 
 			// Scale
-			v->m_Coord->x += deformVec.m_Pos->x;
-			v->m_Coord->y += deformVec.m_Pos->y;
+			v->m_Coord->x *= deformVec.m_Pos->x;
+			v->m_Coord->y *= deformVec.m_Pos->y;
 		}
+		/*
 		lowerJoint->m_Coord->x = deformVec.m_Pos->x;
 		lowerJoint->m_Coord->y = deformVec.m_Pos->y;
+		*/
 	}
 
 }
@@ -578,8 +771,8 @@ void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound)
 //	 								mjTexture									// 
 //////////////////////////////////////////////////////////////////////////////////
 
-mjTexture::mjTexture(int id, std::string fname) {
-	m_Idx = id;
+mjTexture::mjTexture(int id, char* fname) {
+	m_Id = id;
 	m_Filename = fname;
 }
 
@@ -590,31 +783,37 @@ mjTexture::~mjTexture() {
 void mjTexture::LoadTexture() {
 	printf("Importing %s...\n", m_Filename);
 
+	// glGenTextures(1, &m_Id);
+	// glBindTexture(GL_TEXTURE_2D, m_Id);
+
+	/*
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	*/
+
 	stbi_set_flip_vertically_on_load(true);
 	m_TextureData = stbi_load(m_Filename.c_str(), &m_Width, &m_Height, &m_Channels, 0);
 
 	if (m_TextureData)
 	{   
-		if(m_Channels == 3){
+		if (m_Channels == 3) {
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, m_Width, m_Height, 0, GL_RGB, GL_UNSIGNED_BYTE, m_TextureData);
-		}else{
+		}
+		else {
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_Width, m_Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, m_TextureData);
 		}
-		
 
-		glGenerateMipmap(GL_TEXTURE_2D);
-
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);	// set texture wrapping to GL_REPEAT (default wrapping method)
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-		stbi_image_free(m_TextureData);
+		// glGenerateMipmap(GL_TEXTURE_2D);
 	}
 	else
 	{
 		printf("Loading %s failed...\n", m_Filename);
 	}
+
+
+	stbi_image_free(m_TextureData);
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -744,7 +943,7 @@ HumanObject::HumanObject() {
 	m_BoundingBox = new mjBoundingBox();
 
 	m_Vertices = new std::vector<mjVertex*>();
-	m_Texels = new std::vector<mjPos2*>();
+	m_Texels = new std::vector<mjTexel*>();
 	m_Normals = new std::vector<mjNormal*>();
 
 	m_Edges = new std::vector<mjEdge*>();
@@ -782,15 +981,23 @@ mjVertex *create_Vertex(float x, float y, float z) {
 	return new mjVertex(x, y, z);
 }
 
-mjPos2 *create_Texel(float u, float v) {
-	return new mjPos2(u, v);
+mjTexel *create_Texel(float u, float v) {
+	return new mjTexel(u, v);
 }
 
 mjNormal *create_Normal(float x, float y, float z) {
 	return new mjNormal(x, y, z);
 }
 
-mjFace *create_Face(mjVertex *v0, mjVertex *v1, mjVertex *v2, mjPos2 *t0, mjPos2 *t1, mjPos2 *t2, mjNormal *n0, mjNormal *n1, mjNormal *n2, mjMaterial *material, std::string groupName) {
+mjJoint *create_Joint(float x, float y, float z) {
+	return new mjJoint(x, y, z);
+}
+
+mjLandmark* create_Landmark(const char* name, int type, float lvl, float val) {
+	return new mjLandmark(name, type, lvl, val);
+}
+
+mjFace *create_Face(mjVertex *v0, mjVertex *v1, mjVertex *v2, mjTexel *t0, mjTexel *t1, mjTexel *t2, mjNormal *n0, mjNormal *n1, mjNormal *n2, mjMaterial *material, std::string groupName) {
 	return new mjFace(v0, v1, v2, t0, t1, t2, n0, n1, n2, material, groupName);
 }
 
@@ -806,6 +1013,14 @@ bool HumanObject::LoadObj(const char* fname) {
 		printf("Importing %s...\n", fname);
 	}
 
+	std::string fname_s = (std::string) fname;
+	size_t pos = fname_s.find_last_of("\\/");
+	std::string filePath_s = (std::string::npos == pos) ? "" : fname_s.substr(0, pos);
+	filePath_s += "/";
+
+	this->filepath = filePath_s.c_str();
+	this->filename = fname_s.c_str();
+
 	char tag[256];
 	bool isTexture = false;
 	bool isNormal = false;
@@ -818,22 +1033,27 @@ bool HumanObject::LoadObj(const char* fname) {
 
 	while (fscanf_s(fp, "%s", tag, 256) != EOF) {
 		// mtlib-tag
-		if (!strcmp(tag, "mtlib")) {
+		if (!strcmp(tag, "mtllib")) {
 			// 재질 파일명(주로 상대 경로)을 구하여
 			char mtl_fname[128];
 			fscanf_s(fp, "%s", mtl_fname, 128);
-			LoadObjMtl(mtl_fname);
+			std::string absoluteFP_s(filepath);
+			char* absoluteFP = (char*) absoluteFP_s.c_str();
+
+			mtlFilename = mtl_fname;
+
+			LoadObjMtl(strcat(absoluteFP, mtl_fname));
 		}
 
 		// g-tag
-		if (!strcmp(tag, "g")) {
+		else if (!strcmp(tag, "g")) {
 			char grp_name[256];
 			fscanf_s(fp, "%s", grp_name, 256);
 			GroupName = std::string(grp_name);
 		}
 
 		// usemtl-tag 
-		if (!strcmp(tag, "usemtl")) {
+		else if (!strcmp(tag, "usemtl")) {
 			char mtl_name[256];
 			fscanf_s(fp, "%s", mtl_name, 256);
 			pCurrMtl = GetMaterial(mtl_name);
@@ -841,7 +1061,7 @@ bool HumanObject::LoadObj(const char* fname) {
 
 
 		// v-tag
-		if (!strcmp(tag, "v")) {
+		else if (!strcmp(tag, "v")) {
 			float x, y, z;
 			fscanf_s(fp, "%f%f%f", &x, &y, &z);
 			AddVertex(create_Vertex(x, y, z));
@@ -863,7 +1083,7 @@ bool HumanObject::LoadObj(const char* fname) {
 		}
 
 		// vt-tag
-		if (!strcmp(tag, "vt")) {
+		else if (!strcmp(tag, "vt")) {
 			float u, v;
 			isTexture = true;
 			fscanf_s(fp, "%f%f", &u, &v);
@@ -871,7 +1091,7 @@ bool HumanObject::LoadObj(const char* fname) {
 		}
 
 		// vn-tag
-		if (!strcmp(tag, "vn")) {
+		else if (!strcmp(tag, "vn")) {
 			float x, y, z;
 			isNormal = true;
 			fscanf_s(fp, "%f%f%f", &x, &y, &z);
@@ -879,7 +1099,7 @@ bool HumanObject::LoadObj(const char* fname) {
 		}
 
 		// f-tag
-		if (!strcmp(tag, "f")) {
+		else if (!strcmp(tag, "f")) {
 			std::vector<int> vIndices, tIndices, nIndices;
 
 			// Get a whole line
@@ -948,49 +1168,103 @@ bool HumanObject::LoadObj(const char* fname) {
 			}
 			// End of reading line...
 
-			/////// Add Face Info to HumanObject
-			mjVertex *v0 = (*m_Vertices)[vIndices[0]],
-				*v1 = (*m_Vertices)[vIndices[1]],
-				*v2 = (*m_Vertices)[vIndices[2]];
+			if (vIndices.size() == 3) {
+				/////// Add Face Info to HumanObject
+				mjVertex *v0 = (*m_Vertices)[vIndices[0]],
+					*v1 = (*m_Vertices)[vIndices[1]],
+					*v2 = (*m_Vertices)[vIndices[2]];
 
-			mjPos2 *t0 = 0, *t1 = 0, *t2 = 0; 
-			if (isTexture) {
-				t0 = (*m_Texels)[tIndices[0]];
-				t1 = (*m_Texels)[tIndices[1]];
-				t2 = (*m_Texels)[tIndices[2]];
+				mjTexel *t0 = 0, *t1 = 0, *t2 = 0; 
+				if (isTexture) {
+					t0 = (*m_Texels)[tIndices[0]];
+					t1 = (*m_Texels)[tIndices[1]];
+					t2 = (*m_Texels)[tIndices[2]];
+				}
+
+				mjNormal *n0 = 0, *n1 = 0, *n2 = 0;
+				if (isNormal) {
+					n0 = (*m_Normals)[nIndices[0]];
+					n1 = (*m_Normals)[nIndices[1]];
+					n2 = (*m_Normals)[nIndices[2]];
+				}
+				else {
+					// Generate normal if not provided
+					// Assign triangle's normal
+					mjVec3 *n = new mjVec3((v1->m_Coord - v0->m_Coord) ^ (v2->m_Coord - v0->m_Coord));
+
+					//normalize
+					n->x /= n->length();
+					n->y /= n->length();
+					n->z /= n->length();
+
+					mjNormal *norm = new mjNormal(n);
+
+					n0 = n1 = n2 = norm;
+				}
+
+				v0->m_Texel = t0;
+				v0->m_Normal = n0;
+
+				v1->m_Texel = t1;
+				v1->m_Normal = n1;
+
+				v2->m_Texel = t2;
+				v2->m_Normal = n2;
+
+				AddFace(create_Face(v0, v1, v2, t0, t1, t2, n0, n1, n2, pCurrMtl, GroupName));
 			}
+			else if (vIndices.size() == 4) {
+				/////// Add Face Info to HumanObject
+				mjVertex *v0 = (*m_Vertices)[vIndices[0]],
+					*v1 = (*m_Vertices)[vIndices[1]],
+					*v2 = (*m_Vertices)[vIndices[2]],
+					*v3 = (*m_Vertices)[vIndices[3]];
 
-			mjNormal *n0 = 0, *n1 = 0, *n2 = 0;
-			if (isNormal) {
-				n0 = (*m_Normals)[nIndices[0]];
-				n1 = (*m_Normals)[nIndices[1]];
-				n2 = (*m_Normals)[nIndices[2]];
+				mjTexel *t0 = 0, *t1 = 0, *t2 = 0, *t3 = 0;
+				if (isTexture) {
+					t0 = (*m_Texels)[tIndices[0]];
+					t1 = (*m_Texels)[tIndices[1]];
+					t2 = (*m_Texels)[tIndices[2]];
+					t3 = (*m_Texels)[tIndices[3]];
+				}
+
+				mjNormal *n0 = 0, *n1 = 0, *n2 = 0, *n3 = 0;
+				if (isNormal) {
+					n0 = (*m_Normals)[nIndices[0]];
+					n1 = (*m_Normals)[nIndices[1]];
+					n2 = (*m_Normals)[nIndices[2]];
+					n3 = (*m_Normals)[nIndices[3]];
+				}
+				else {
+					// Generate normal if not provided
+					// Assign triangle's normal
+					mjVec3 *n = new mjVec3((v1->m_Coord - v0->m_Coord) ^ (v2->m_Coord - v0->m_Coord));
+
+					//normalize
+					n->x /= n->length();
+					n->y /= n->length();
+					n->z /= n->length();
+
+					mjNormal *norm = new mjNormal(n);
+
+					n0 = n1 = n2 = n3 = norm;
+				}
+
+				v0->m_Texel = t0;
+				v0->m_Normal = n0;
+
+				v1->m_Texel = t1;
+				v1->m_Normal = n1;
+
+				v2->m_Texel = t2;
+				v2->m_Normal = n2;
+
+				v3->m_Texel = t3;
+				v3->m_Normal = n3;
+
+				AddFace(create_Face(v0, v1, v2, t0, t1, t2, n0, n1, n2, pCurrMtl, GroupName));
+				AddFace(create_Face(v0, v2, v3, t0, t2, t3, n0, n2, n3, pCurrMtl, GroupName));
 			}
-			else {
-				// Generate normal if not provided
-				// Assign triangle's normal
-				mjVec3 *n = new mjVec3((v1->m_Coord - v0->m_Coord) ^ (v2->m_Coord - v0->m_Coord));
-
-				//normalize
-				n->x /= n->length();
-				n->y /= n->length();
-				n->z /= n->length();
-
-				mjNormal *norm = new mjNormal(n);
-
-				n0 = n1 = n2 = norm;
-			}
-
-			v0->m_Texel = t0;
-			v0->m_Normal = n0;
-
-			v1->m_Texel = t1;
-			v1->m_Normal = n1;
-
-			v2->m_Texel = t2;
-			v2->m_Normal = n2;
-
-			AddFace(create_Face(v0, v1, v2, t0, t1, t2, n0, n1, n2, pCurrMtl, GroupName));
 
 
 			/////// Add Edge
@@ -1024,20 +1298,13 @@ bool HumanObject::LoadObj(const char* fname) {
 	UpdateIndexBuff();
 }
 
-mjTexture *create_texture(int id, std::string fname)
+mjTexture* create_texture(int id, char* fname)
 {
-	mjTexture *pTexture = new mjTexture(id, fname);
+	return new mjTexture(id, fname);
+}
 
-	if (pTexture != NULL)
-	{
-		pTexture->LoadTexture();
-		return pTexture;
-	}
-	else
-	{
-		delete pTexture;
-		return NULL;
-	}
+mjBone *create_Bone(mjJoint *upper, mjJoint *lower) {
+	return new mjBone(upper, lower);
 }
 
 bool HumanObject::LoadObjMtl(const char* fname) {
@@ -1047,7 +1314,7 @@ bool HumanObject::LoadObjMtl(const char* fname) {
 	// 파일을 열고, 
 	FILE *fp;
 	fopen_s(&fp, fname, "r");
-	if (!fp) // 실패하면 false를 반환한다.
+	if (!fp) // 실패하면 false를 반환한다
 	{
 		printf("Importing %s failed...\n", fname);
 		return false;
@@ -1105,16 +1372,23 @@ bool HumanObject::LoadObjMtl(const char* fname) {
 			char tex_name[512];
 			fscanf_s(fp, "%s", tex_name, 512);
 
+			std::string texFP_s(filepath);
+			char* texFP = (char*)texFP_s.c_str();
+
+			strcat(texFP, tex_name);
+
 			// 이미 로드된 텍스처라면 기존의 텍스처를 설정한다.
-			pMtl->m_Texture = GetTexture(tex_name);
+			pMtl->m_Texture = GetTexture(texFP);
+
 
 			// 새로운 텍스처라면
 			if (pMtl->m_Texture == NULL)
 			{
 				// 새로운 텍스처를 생성하여 메쉬에 추가하고, 재질에 설정한다.
-				mjTexture *pTexture = ::create_texture(0, tex_name);
+				mjTexture *pTexture = create_texture(0, texFP);
 				if (pTexture != NULL)
 				{
+					// pTexture->LoadTexture();
 					AddTexture(pTexture);
 					pMtl->SetTexture(pTexture);
 				}
@@ -1125,14 +1399,6 @@ bool HumanObject::LoadObjMtl(const char* fname) {
 	// 파일을 닫는다.
 	fclose(fp);
 	return true;
-}
-
-bool HumanObject::LoadHuman(const char* fname) {
-	return true;
-}
-
-mjJoint *create_Joint(float x, float y, float z) {
-	return new mjJoint(x, y, z);
 }
 
 bool HumanObject::LoadJoints(const char* fname) {
@@ -1161,19 +1427,15 @@ bool HumanObject::LoadJoints(const char* fname) {
 	if (!SetSkeleton())
 		return false;
 
-	// Assign weights to bones
-	if (!AssignWeight())
-		return false;
-
 	// Set body segment with bones
 	if (!SetSegment())
 		return false;
 
-	return true;
-}
+	// Assign weights to bones
+	if (!AssignWeight())
+		return false;
 
-mjLandmark* create_Landmark(const char* name, int type, float lvl, float val) {
-	return new mjLandmark(name, type, lvl, val);
+	return true;
 }
 
 bool HumanObject::LoadLandmarks(const char* fname) {
@@ -1208,8 +1470,355 @@ bool HumanObject::LoadLandmarks(const char* fname) {
 	return true;
 }
 
-mjBone *create_Bone(mjJoint *upper, mjJoint *lower) {
-	return new mjBone(upper, lower);
+bool HumanObject::LoadHuman(const char* fname) {
+	FILE *fp;
+	fopen_s(&fp, fname, "r");
+
+	if (!fp) {
+		printf("Loading %s failed...\n", fname);
+		return false;
+	}
+	else {
+		printf("Importing %s...\n", fname);
+	}
+
+	if (m_Skeleton == NULL) {
+		m_Skeleton = new mjSkeleton();
+	}
+	int jointIdx = 0;
+
+	if (m_Landmarks == NULL) {
+		m_Landmarks = new std::vector<mjLandmark *>();
+	}
+
+	std::string fname_s = (std::string) fname;
+	size_t pos = fname_s.find_last_of("\\/");
+	std::string filePath_s = (std::string::npos == pos) ? "" : fname_s.substr(0, pos);
+	filePath_s += "/";
+
+	this->filepath = filePath_s.c_str();
+	this->filename = fname_s.c_str();
+
+	bool isTexture = false;
+	bool isNormal = false;
+
+	std::string GroupName;
+	mjMaterial *pCurrMtl = NULL;
+
+	float minX = INFINITY, minY = INFINITY, minZ = INFINITY;
+	float maxX = -INFINITY, maxY = -INFINITY, maxZ = -INFINITY;
+
+	// mjPos3 handR = mjPos3(), handL = mjPos3();
+
+	// mtl 파일이 있다면 Human 파일과 같은 디렉토리에 있어야한다
+	char tag[256];
+	while (fscanf_s(fp, "%s", tag, 256) != EOF) {
+		// mtlib-tag
+		if (!strcmp(tag, "mtllib")) {
+			// 재질 파일명(주로 상대 경로)을 구하여
+			char mtl_fname[128];
+			fscanf_s(fp, "%s", mtl_fname, 128);
+			std::string absoluteFP_s(filepath);
+			char* absoluteFP = (char*)absoluteFP_s.c_str();
+
+			mtlFilename = mtl_fname;
+
+			LoadObjMtl(strcat(absoluteFP, mtl_fname));
+		}
+
+		// g-tag
+		else if (!strcmp(tag, "g")) {
+			char grp_name[256];
+			fscanf_s(fp, "%s", grp_name, 256);
+			GroupName = std::string(grp_name);
+		}
+
+		// usemtl-tag 
+		else if (!strcmp(tag, "usemtl")) {
+			char mtl_name[256];
+			fscanf_s(fp, "%s", mtl_name, 256);
+			pCurrMtl = GetMaterial(mtl_name);
+		}
+
+		// v-tag
+		else if (!strcmp(tag, "v")) {
+			float x, y, z;
+			fscanf_s(fp, "%f%f%f", &x, &y, &z);
+			AddVertex(create_Vertex(x, y, z));
+
+			if (x < minX) {
+				minX = x;
+				/*
+				handR.x = x;
+				handR.y = y;
+				handR.z = z;
+				*/
+			}
+			if (x > maxX) {
+				maxX = x;
+				/*
+				handL.x = x;
+				handL.y = y;
+				handL.z = z;
+				*/
+			}
+
+			if (y < minY)
+				minY = y;
+			if (y > maxY)
+				maxY = y;
+
+			if (z < minZ)
+				minZ = z;
+			if (z > maxZ)
+				maxZ = z;
+		}
+
+		// vt-tag
+		else if (!strcmp(tag, "vt")) {
+			float u, v;
+			isTexture = true;
+			fscanf_s(fp, "%f%f", &u, &v);
+			AddTexel(create_Texel(u, v));
+		}
+
+		// vn-tag
+		else if (!strcmp(tag, "vn")) {
+			float x, y, z;
+			isNormal = true;
+			fscanf_s(fp, "%f%f%f", &x, &y, &z);
+			AddNormal(create_Normal(x, y, z));
+		}
+
+		// f-tag
+		else if (!strcmp(tag, "f")) {
+			std::vector<int> vIndices, tIndices, nIndices;
+
+			// Get a whole line
+			char line[256];
+			fgets(line, 256, fp);
+			char *data = line;
+
+			// Reading line...
+			while (true) {
+				// Move past spaces and newlines
+				while (*data == ' ' || *data == '\n')
+					data++;
+
+				// When a line ends, break
+				if (!strcmp(data, ""))
+					break;
+
+
+				// Read index info to a buffer
+				char buffer[256];
+				sscanf_s(data, "%s", buffer, 256);
+				data += strlen(buffer);
+
+
+				char separator;
+				int vidx, tidx, nidx;
+
+				// when both texture and normal
+				if (isTexture && isNormal) {
+					sscanf_s(buffer, "%d%c%d%c%d", &vidx, &separator, 1, &tidx, &separator, 1, &nidx);
+					vidx = (vidx < 0) ? -vidx : vidx;
+					tidx = (tidx < 0) ? -tidx : tidx;
+					nidx = (nidx < 0) ? -nidx : nidx;
+
+					vIndices.push_back(vidx - 1);
+					tIndices.push_back(tidx - 1);
+					nIndices.push_back(nidx - 1);
+					continue;
+				}
+				// when only texture
+				else if (isTexture && !isNormal) {
+					sscanf_s(buffer, "%d%c%d", &vidx, &separator, 1, &tidx);
+					vidx = (vidx < 0) ? -vidx : vidx;
+					tidx = (tidx < 0) ? -tidx : tidx;
+					vIndices.push_back(vidx - 1);
+					tIndices.push_back(tidx - 1);
+					continue;
+				}
+				// when only normal 
+				else if (!isTexture && isNormal) {
+					sscanf_s(buffer, "%d%c%d", &vidx, &separator, 1, &nidx);
+					vidx = (vidx < 0) ? -vidx : vidx;
+					nidx = (nidx < 0) ? -nidx : nidx;
+					vIndices.push_back(vidx - 1);
+					nIndices.push_back(nidx - 1);
+					continue;
+				}
+				// when only vIndex
+				else if (!isTexture && !isNormal) {
+					sscanf_s(buffer, "%d", &vidx);
+					vidx = (vidx < 0) ? -vidx : vidx;
+					vIndices.push_back(vidx - 1);
+					continue;
+				}
+
+			}
+			// End of reading line...
+
+			if (vIndices.size() == 3) {
+				/////// Add Face Info to HumanObject
+				mjVertex *v0 = (*m_Vertices)[vIndices[0]],
+					*v1 = (*m_Vertices)[vIndices[1]],
+					*v2 = (*m_Vertices)[vIndices[2]];
+
+				mjTexel *t0 = 0, *t1 = 0, *t2 = 0;
+				if (isTexture) {
+					t0 = (*m_Texels)[tIndices[0]];
+					t1 = (*m_Texels)[tIndices[1]];
+					t2 = (*m_Texels)[tIndices[2]];
+				}
+
+				mjNormal *n0 = 0, *n1 = 0, *n2 = 0;
+				if (isNormal) {
+					n0 = (*m_Normals)[nIndices[0]];
+					n1 = (*m_Normals)[nIndices[1]];
+					n2 = (*m_Normals)[nIndices[2]];
+				}
+				else {
+					// Generate normal if not provided
+					// Assign triangle's normal
+					mjVec3 *n = new mjVec3((v1->m_Coord - v0->m_Coord) ^ (v2->m_Coord - v0->m_Coord));
+
+					//normalize
+					n->x /= n->length();
+					n->y /= n->length();
+					n->z /= n->length();
+
+					mjNormal *norm = new mjNormal(n);
+
+					n0 = n1 = n2 = norm;
+				}
+
+				v0->m_Texel = t0;
+				v0->m_Normal = n0;
+
+				v1->m_Texel = t1;
+				v1->m_Normal = n1;
+
+				v2->m_Texel = t2;
+				v2->m_Normal = n2;
+
+				AddFace(create_Face(v0, v1, v2, t0, t1, t2, n0, n1, n2, pCurrMtl, GroupName));
+			}
+			else if (vIndices.size() == 4) {
+				/////// Add Face Info to HumanObject
+				mjVertex *v0 = (*m_Vertices)[vIndices[0]],
+					*v1 = (*m_Vertices)[vIndices[1]],
+					*v2 = (*m_Vertices)[vIndices[2]],
+					*v3 = (*m_Vertices)[vIndices[3]];
+
+				mjTexel *t0 = 0, *t1 = 0, *t2 = 0, *t3 = 0;
+				if (isTexture) {
+					t0 = (*m_Texels)[tIndices[0]];
+					t1 = (*m_Texels)[tIndices[1]];
+					t2 = (*m_Texels)[tIndices[2]];
+					t3 = (*m_Texels)[tIndices[3]];
+				}
+
+				mjNormal *n0 = 0, *n1 = 0, *n2 = 0, *n3 = 0;
+				if (isNormal) {
+					n0 = (*m_Normals)[nIndices[0]];
+					n1 = (*m_Normals)[nIndices[1]];
+					n2 = (*m_Normals)[nIndices[2]];
+					n3 = (*m_Normals)[nIndices[3]];
+				}
+				else {
+					// Generate normal if not provided
+					// Assign triangle's normal
+					mjVec3 *n = new mjVec3((v1->m_Coord - v0->m_Coord) ^ (v2->m_Coord - v0->m_Coord));
+
+					//normalize
+					n->x /= n->length();
+					n->y /= n->length();
+					n->z /= n->length();
+
+					mjNormal *norm = new mjNormal(n);
+
+					n0 = n1 = n2 = n3 = norm;
+				}
+
+				v0->m_Texel = t0;
+				v0->m_Normal = n0;
+
+				v1->m_Texel = t1;
+				v1->m_Normal = n1;
+
+				v2->m_Texel = t2;
+				v2->m_Normal = n2;
+
+				v3->m_Texel = t3;
+				v3->m_Normal = n3;
+
+				AddFace(create_Face(v0, v1, v2, t0, t1, t2, n0, n1, n2, pCurrMtl, GroupName));
+				AddFace(create_Face(v0, v2, v3, t0, t2, t3, n0, n2, n3, pCurrMtl, GroupName));
+			}
+		}
+	
+		// joint-tag
+		else if (!strcmp(tag, "jo")) {
+			float x, y, z;
+			fscanf_s(fp, "%f%f%f", &x, &y, &z);
+			m_Skeleton->AddJoint(jointIdx, create_Joint(x, y, z));
+			jointIdx++;
+		}
+
+		// landmark-tag
+		else if (!strcmp(tag, "la")) {
+			char ltag[256], ltype[128];
+			float level, value;
+
+			fscanf_s(fp, "%s%s%f%f", ltag, 128, ltype, 128, &level, &value, 512);
+			if (!strcmp(ltype, "Length")) {
+				AddLandmark(create_Landmark(ltag, Length, level, value));
+			}
+			else if (!strcmp(ltype, "Girth")) {
+				AddLandmark(create_Landmark(ltag, Girth, level, value));
+			}
+			else {
+				printf("Non-existent Landmark type %s\n", ltype);
+			}
+		}
+	}
+
+	if (isTexture)
+		m_RenderType = RENDER_TEXTURE;
+	else
+		m_RenderType = RENDER_SHADE;
+
+
+	// printf("handR : %f %f %f\nhandL : %f %f %f\n", handR.x, handR.y, handR.z, handL.x, handL.y, handL.z);
+
+	// Set-up skeleton and bones
+	if (!SetSkeleton())
+		return false;
+
+	// Set body segment with bones
+	if (!SetSegment())
+		return false;
+
+	// Assign weights to bones
+	if (!AssignWeight())
+		return false;
+
+
+	m_BoundingBox->SetBounds(minX, maxX, minY, maxY, minZ, maxZ);
+
+	m_MinX = minX;
+	m_MaxX = maxX;
+	m_MinY = minY;
+	m_MaxY = maxY;
+	m_MinZ = minZ;
+	m_MaxZ = maxZ;
+
+	UpdateVertBuff();
+	UpdateIndexBuff();
+
+	return true;
 }
 
 bool HumanObject::SetSkeleton() {
@@ -1258,6 +1867,9 @@ bool HumanObject::SetSkeleton() {
 
 	m_Skeleton->AddBone(Bone_ribR, create_Bone((*m_Skeleton->m_Joints)[Joint_spine3], (*m_Skeleton->m_Joints)[Joint_ribR]));
 	m_Skeleton->AddBone(Bone_ribL, create_Bone((*m_Skeleton->m_Joints)[Joint_spine3], (*m_Skeleton->m_Joints)[Joint_ribL]));
+
+	m_Skeleton->AddBone(Bone_handR, create_Bone((*m_Skeleton->m_Joints)[Joint_wristR], (*m_Skeleton->m_Joints)[Joint_handR]));
+	m_Skeleton->AddBone(Bone_handL, create_Bone((*m_Skeleton->m_Joints)[Joint_wristL], (*m_Skeleton->m_Joints)[Joint_handL]));
 
 
 	// Set Bone Parent and Child
@@ -1320,11 +1932,50 @@ bool HumanObject::SetSkeleton() {
 
 	(*m_Skeleton->m_Bones)[Bone_upperLeg1L]->SetChild((*m_Skeleton->m_Bones)[Bone_lowerLegL]);
 
+	(*m_Skeleton->m_Bones)[Bone_lowerArm2R]->SetChild((*m_Skeleton->m_Bones)[Bone_handR]);
+	(*m_Skeleton->m_Bones)[Bone_lowerArm2L]->SetChild((*m_Skeleton->m_Bones)[Bone_handL]);
+
 	// Set leaf
-	(*m_Skeleton->m_Bones)[Bone_lowerArm2R]->isLeaf = true;
-	(*m_Skeleton->m_Bones)[Bone_lowerArm2L]->isLeaf = true;
+	(*m_Skeleton->m_Bones)[Bone_handR]->isLeaf = true;
+	(*m_Skeleton->m_Bones)[Bone_handL]->isLeaf = true;
 
 	std::cout << "Successful!" << std::endl;
+}
+
+bool HumanObject::SetSegment() {
+	std::cout << "Setting Segments... " << std::endl;
+
+	// 각 Bone에 가까운 점들로 Segment를 구성한다
+	for (mjVertex *v : *m_Vertices) {
+		int closestBoneIdx = -1;
+		float minDistance = INFINITY;
+
+		for (mjBone *b : (*m_Skeleton->m_Bones)) {
+			mjPos3 upperJoint = *b->m_UpperJoint->m_Coord;
+			mjPos3 lowerJoint = *b->m_LowerJoint->m_Coord;
+
+			float distance = distToLineSegment(*v->m_Coord, upperJoint, lowerJoint);
+
+			if (distance < minDistance) {
+				closestBoneIdx = b->m_Idx;
+				minDistance = distance;
+			}
+		}
+
+		if (closestBoneIdx != -1) {
+			m_Segment[closestBoneIdx].push_back(v);
+			v->m_Segment = closestBoneIdx;
+		}
+		else {
+			std::cout << "No closest bone found for vertex " << v->m_Idx << " !!\n" << std::endl;
+			return false;
+		}
+	}
+
+	UpdateVertBuff();
+
+	std::cout << "Successful!" << std::endl;
+	return true;
 }
 
 bool HumanObject::AssignWeight() {
@@ -1364,79 +2015,179 @@ bool HumanObject::AssignWeight() {
 	return true;
 }
 
-bool HumanObject::SetSegment() {
-	std::cout << "Setting Segments... " << std::endl;
-
-	// 각 Bone에 가까운 점들로 Segment를 구성한다
-	for (mjVertex *v : *m_Vertices) {
-		int closestBoneIdx = -1;
-		float minDistance = INFINITY;
-
-		for (mjBone *b : (*m_Skeleton->m_Bones)) {
-			mjPos3 upperJoint = *b->m_UpperJoint->m_Coord;
-			mjPos3 lowerJoint = *b->m_LowerJoint->m_Coord;
-
-			float distance = distToLineSegment(*v->m_Coord, upperJoint, lowerJoint);
-
-			if (distance < minDistance) {
-				closestBoneIdx = b->m_Idx;
-				minDistance = distance;
-			}
-		}
-
-
-
-		if (closestBoneIdx != -1) {
-			m_Segment[closestBoneIdx].push_back(v);
-			v->m_Segment = closestBoneIdx;
-		}
-		else {
-			// assert("No closest bone found for vertex %d!!\n", v->m_Idx);
-			std::cout << "No closest bone found for vertex " << v->m_Idx << " !!\n" << std::endl;
-			return false;
-		}
-	}
-
-	UpdateVertBuff();
-
-	std::cout << "Successful!" << std::endl;
-	return true;
-}
-
 bool HumanObject::WriteObj(const char* fname) {
 	printf("Writing to %s...\n", fname);
 
 	std::ofstream oFile(fname);
 
+	if (m_Materials != NULL) {
+		// Assuming a single material file
+		oFile << "mtllib " << mtlFilename << std::endl;
+	}
+
 	for (mjVertex *v : *m_Vertices) {
 		oFile << "v " <<  v->m_Coord->x << " " << v->m_Coord->y << " " << v->m_Coord->z << std::endl;
 	}
 
-	/*
-	for (mjVec2 *t : *m_texels) {
-		oFile << "vt " << t->x << " " << t->y << std::endl;
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjTexel *t : *m_Texels) {
+		oFile << "vt " << t->m_Coord->x << " " << t->m_Coord->y << std::endl;
 	}
 
-	for (mjVec3 *n : *m_normals) {
-		oFile << "vn " << n->x << " " << n->y << " " << n->z << std::endl;
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjNormal *n : *m_Normals) {
+		oFile << "vn " << n->m_Dir->x << " " << n->m_Dir->y << " " << n->m_Dir->z << std::endl;
 	}
-	*/
 
-	for (int i = 0; i < m_Faces->size(); i++) {
-		int idx0 = (*m_Faces)[i]->GetVertIdx(0) + 1;
-		int idx1 = (*m_Faces)[i]->GetVertIdx(1) + 1;
-		int idx2 = (*m_Faces)[i]->GetVertIdx(2) + 1;
+	oFile << std::endl;
+	oFile << std::endl;
 
-		oFile << "f " << idx0 << " " << idx1 << " " << idx2 << std::endl;
+	// 일단은 material이 하나라고 처리하기 때문에 그냥 usemtl로 사용
+	oFile << "usemtl default" << std::endl;
+
+	for (mjFace *f : *m_Faces) {
+		// std::string mtlName = (f->m_Material == NULL) ? "default" : f->m_Material->m_Name;
+		
+		int idx0 = f->GetVertIdx(0) + 1;
+		int idx1 = f->GetVertIdx(1) + 1;
+		int idx2 = f->GetVertIdx(2) + 1;
+
+		if (m_Texels->empty() && m_Normals->empty()) {
+			oFile << "f " << idx0 << " " << idx1 << " " << idx2 << std::endl;
+		}
+		else if (m_Normals->empty()) {
+			int t0 = f->GetTexIdx(0) + 1;
+			int t1 = f->GetTexIdx(1) + 1;
+			int t2 = f->GetTexIdx(2) + 1;
+
+			oFile << "f " 
+				<< idx0 <<  "/" << t0 << " " 
+				<< idx1 << "/" << t1 << " "
+				<< idx2 << "/" << t2 << " "
+				<< std::endl;
+		}
+		else {
+			int t0 = f->GetTexIdx(0) + 1;
+			int t1 = f->GetTexIdx(1) + 1;
+			int t2 = f->GetTexIdx(2) + 1;
+
+			int n0 = f->GetNormIdx(0) + 1;
+			int n1 = f->GetNormIdx(1) + 1;
+			int n2 = f->GetNormIdx(2) + 1;
+
+			oFile << "f " 
+				<< idx0 <<  "/" << t0 << "/" << n0 << " " 
+				<< idx1 << "/" << t1 << "/" << n1 << " "
+				<< idx2 << "/" << t2 << "/" << n2 << " "
+				<< std::endl;
+		}
 	}
 
 	oFile.close();
-
 	return true;
 }
 
 void HumanObject::WriteHuman(const char* fname) {
+	std::ofstream oFile(fname);
 
+	//////////////////////////////////////////////// write as OBJ
+
+	if (m_Materials != NULL) {
+		// Assuming a single material file
+		oFile << "mtllib " << mtlFilename << std::endl;
+	}
+
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjVertex *v : *m_Vertices) {
+		oFile << "v " <<  v->m_Coord->x << " " << v->m_Coord->y << " " << v->m_Coord->z << std::endl;
+	}
+
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjTexel *t : *m_Texels) {
+		oFile << "vt " << t->m_Coord->x << " " << t->m_Coord->y << std::endl;
+	}
+
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjNormal *n : *m_Normals) {
+		oFile << "vn " << n->m_Dir->x << " " << n->m_Dir->y << " " << n->m_Dir->z << std::endl;
+	}
+
+	oFile << std::endl;
+	oFile << std::endl;
+
+	// 일단은 material이 하나라고 처리하기 때문에 그냥 usemtl로 사용
+	oFile << "usemtl default" << std::endl;
+
+	for (mjFace *f : *m_Faces) {
+		// std::string mtlName = (f->m_Material == NULL) ? "default" : f->m_Material->m_Name;
+		
+		int idx0 = f->GetVertIdx(0) + 1;
+		int idx1 = f->GetVertIdx(1) + 1;
+		int idx2 = f->GetVertIdx(2) + 1;
+
+		if (m_Texels->empty() && m_Normals->empty()) {
+			oFile << "f " << idx0 << " " << idx1 << " " << idx2 << std::endl;
+		}
+		else if (m_Normals->empty()) {
+			int t0 = f->GetTexIdx(0) + 1;
+			int t1 = f->GetTexIdx(1) + 1;
+			int t2 = f->GetTexIdx(2) + 1;
+
+			oFile << "f " 
+				<< idx0 <<  "/" << t0 << " " 
+				<< idx1 << "/" << t1 << " "
+				<< idx2 << "/" << t2 << " "
+				<< std::endl;
+		}
+		else {
+			int t0 = f->GetTexIdx(0) + 1;
+			int t1 = f->GetTexIdx(1) + 1;
+			int t2 = f->GetTexIdx(2) + 1;
+
+			int n0 = f->GetNormIdx(0) + 1;
+			int n1 = f->GetNormIdx(1) + 1;
+			int n2 = f->GetNormIdx(2) + 1;
+
+			oFile << "f " 
+				<< idx0 <<  "/" << t0 << "/" << n0 << " " 
+				<< idx1 << "/" << t1 << "/" << n1 << " "
+				<< idx2 << "/" << t2 << "/" << n2 << " "
+				<< std::endl;
+		}
+	}
+
+
+	//////////////////////////////////////////////// JOINTS
+
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjJoint *joint : *m_Skeleton->m_Joints) {
+		oFile << "jo " << joint->m_Coord->x << " " << joint->m_Coord->y << " " << joint->m_Coord->z << std::endl;
+	}
+
+	//////////////////////////////////////////////// LANDMARKS
+
+	oFile << std::endl;
+	oFile << std::endl;
+
+	for (mjLandmark * landmark : *m_Landmarks) {
+		std::string type = (landmark->m_Type == Girth) ? "Girth" : "Length";
+
+		oFile << "la " << landmark->m_Name << " " << type << " " << landmark->m_Level << " " << landmark->m_Value << std::endl;
+	}
+
+	oFile.close();
 }
 
 
@@ -1454,11 +2205,13 @@ void HumanObject::AddVertex(mjVertex *v) {
 	m_Vertices->push_back(v);
 }
 
-void HumanObject::AddTexel(mjPos2 *t) {
+void HumanObject::AddTexel(mjTexel *t) {
+	t->m_Idx = m_Texels->size();
 	m_Texels->push_back(t);
 }
 
 void HumanObject::AddNormal(mjNormal *n) {
+	n->m_Idx = m_Normals->size();
 	m_Normals->push_back(n);
 }
 
@@ -1510,9 +2263,9 @@ void HumanObject::UpdateIndexBuff() {
 	for (mjFace *f : *m_Faces) {
 		std::string mtlName = (f->m_Material == NULL) ? "default" : f->m_Material->m_Name;
 
-		m_IndexBuf[mtlName].push_back(f->GetVertIdx(0));
-		m_IndexBuf[mtlName].push_back(f->GetVertIdx(1));
-		m_IndexBuf[mtlName].push_back(f->GetVertIdx(2));
+		m_IndexBuf[mtlName].push_back(3 * f->m_Idx);
+		m_IndexBuf[mtlName].push_back(3 * f->m_Idx + 1);
+		m_IndexBuf[mtlName].push_back(3 * f->m_Idx + 2);
 	}
 }
 
@@ -1528,25 +2281,6 @@ void HumanObject::UpdateVertBuff() {
 		b[i] = rand() / double(RAND_MAX);
 	}
 
-	/*
-	// 각각의 삼각형에 대하여
-	for (mjFace *f : *m_Faces)
-	{
-		std::string mtlName = (f->m_Material == NULL) ? "default" : f->m_Material->m_Name;
-
-		// 삼각형의 세 정점의 좌표를 재질명에 따라 구분하여 정점 버퍼에 저장한다.
-		for (int i = 0; i < 3; ++i)
-		{
-			mjVertex *v = f->GetVert(i);
-
-			// Position
-			m_VertBuf[mtlName].push_back(v->m_Coord->x);
-			m_VertBuf[mtlName].push_back(v->m_Coord->y);
-			m_VertBuf[mtlName].push_back(v->m_Coord->z);
-		}
-	}
-	*/
-
 
 	for (mjFace *f : *m_Faces) {
 		std::string mtlName = (f->m_Material == NULL) ? "default" : f->m_Material->m_Name;
@@ -1560,8 +2294,8 @@ void HumanObject::UpdateVertBuff() {
 			m_VertBuf[mtlName].push_back(v->m_Coord->z);
 
 			// Texel
-			m_VertBuf[mtlName].push_back(v->m_Texel->x);
-			m_VertBuf[mtlName].push_back(v->m_Texel->y);
+			m_VertBuf[mtlName].push_back(v->m_Texel->m_Coord->x);
+			m_VertBuf[mtlName].push_back(v->m_Texel->m_Coord->y);
 
 			// Normal
 			m_VertBuf[mtlName].push_back(v->m_Normal->m_Dir->x);
@@ -1606,42 +2340,11 @@ void HumanObject::UpdateVertBuff() {
 void HumanObject::UpdateNormBuff() {
 	m_NormBuf.clear();
 
-	/*
-	// 각각의 삼각형에 대하여
-	for (mjFace *f : *m_Faces)
-	{
-		// 재질명을 구하여
-		std::string MtlName = (f->m_Material == NULL) ? "default" : f->m_Material->m_Name;
-
-		// 삼각형의 세 법선의 좌표를 재질명에 따라 구분하여 법선 버퍼에 저장한다.
-		for (int i = 0; i < 3; ++i)
-		{
-			mjVec3 *n = f->GetNormal(i);
-			m_NormBuf[MtlName].push_back((float)n->m_Dir[0]);
-			m_NormBuf[MtlName].push_back((float)n->m_Dir[1]);
-			m_NormBuf[MtlName].push_back((float)n->m_Dir[2]);
-		}
-	}
-	*/
-
-	/*
-	for (mjNormal *n : *m_Normals) {
-		m_NormBuf.push_back(n->m_Dir->x);
-		m_NormBuf.push_back(n->m_Dir->y);
-		m_NormBuf.push_back(n->m_Dir->z);
-	}
-	*/
 }
 
 void HumanObject::UpdateTexBuff() {
 	m_TexBuf.clear();
 
-	/*
-	for (mjPos2 *t : *m_Texels) {
-		m_TexBuf.push_back(t->x);
-		m_TexBuf.push_back(t->y);
-	}
-	*/
 }
 
 mjMaterial *HumanObject::GetMaterial(std::string fname) {
@@ -1679,7 +2382,7 @@ int HumanObject::GetLandmarkNum() {
 // [in] i : 
 // [out] buffer : buffer에 이름 저장
 void HumanObject::GetLandmarkName(int i, char* buffer) {
-	buffer = (char*) (*m_Landmarks)[i]->m_Name;
+	buffer = (char*) (*m_Landmarks)[i]->m_Name.c_str();
 }
 
 
@@ -1705,15 +2408,6 @@ float HumanObject::GetLandmarkValue(char* lname) {
 void HumanObject::SetSizes(float *sizes) {
 }
 
-#define Height 0
-#define Bust 1
-#define Waist 2
-#define Hip 3
-#define ArmLengthR 4
-#define ArmLengthL 5
-#define LegLengthR 6
-#define LegLengthL 7
-#define ShoulderLength 8
 // i번째 측정항목 치수 변형
 // 일단은 Segment를 각 랜드마크마다 하드코딩해서 지정해준다 (20. 8. 25)
 // ToDo::임의의 Landmark segment import 자동화 필요. 방법 구상해볼 것.
@@ -1772,6 +2466,7 @@ void HumanObject::SetSize(int i, float value) {
 			(*m_Skeleton->m_Joints)[Joint_elbowTwistR]->m_Coord->x -= jointMovement_R;
 			(*m_Skeleton->m_Joints)[Joint_elbowTwist1R]->m_Coord->x -= jointMovement_R;
 			(*m_Skeleton->m_Joints)[Joint_wristR]->m_Coord->x -= jointMovement_R;
+			(*m_Skeleton->m_Joints)[Joint_handR]->m_Coord->x -= jointMovement_R;
 
 			for (mjVertex *v : m_Segment[Bone_upperArmR]) {
 				v->m_Coord->x -= jointMovement_R;
@@ -1788,6 +2483,9 @@ void HumanObject::SetSize(int i, float value) {
 			for (mjVertex *v : m_Segment[Bone_lowerArm2R]) {
 				v->m_Coord->x -= jointMovement_R;
 			}
+			for (mjVertex *v : m_Segment[Bone_handR]) {
+				v->m_Coord->x -= jointMovement_R;
+			}
 
 
 			(*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord->x += jointMovement_L;
@@ -1796,6 +2494,7 @@ void HumanObject::SetSize(int i, float value) {
 			(*m_Skeleton->m_Joints)[Joint_elbowTwistL]->m_Coord->x += jointMovement_L;
 			(*m_Skeleton->m_Joints)[Joint_elbowTwist1L]->m_Coord->x += jointMovement_L;
 			(*m_Skeleton->m_Joints)[Joint_wristL]->m_Coord->x += jointMovement_L;
+			(*m_Skeleton->m_Joints)[Joint_handL]->m_Coord->x += jointMovement_L;
 
 			for (mjVertex *v : m_Segment[Bone_upperArmL]) {
 				v->m_Coord->x += jointMovement_L;
@@ -1810,6 +2509,9 @@ void HumanObject::SetSize(int i, float value) {
 				v->m_Coord->x += jointMovement_L;
 			}
 			for (mjVertex *v : m_Segment[Bone_lowerArm2L]) {
+				v->m_Coord->x += jointMovement_L;
+			}
+			for (mjVertex *v : m_Segment[Bone_handL]) {
 				v->m_Coord->x += jointMovement_L;
 			}
 		}
@@ -1955,14 +2657,14 @@ int HumanObject::GetFaceNum() {
 // @param
 // [out] coord
 void HumanObject::GetVert(int i, float *coord) {
-	coord[i] = (*m_Vertices)[i]->m_Coord->x;
-	coord[i + 1] = (*m_Vertices)[i]->m_Coord->y;
-	coord[i + 2] = (*m_Vertices)[i]->m_Coord->z;
+	coord[0] = (*m_Vertices)[i]->m_Coord->x;
+	coord[1] = (*m_Vertices)[i]->m_Coord->y;
+	coord[2] = (*m_Vertices)[i]->m_Coord->z;
 }
 
 
 // 전체 정점 좌표 반환
-// @param
+// @ params
 // [out] coord
 void HumanObject::GetVerts(float *coord) {
 	int i = 0;
@@ -1976,7 +2678,7 @@ void HumanObject::GetVerts(float *coord) {
 
 
 // i번째 face의 번호를 반환
-// @param
+// @ params
 // [out] node
 void HumanObject::GetIndex(int i, int *node) {
 	*node = (*m_Faces)[i]->m_Idx;
@@ -1984,7 +2686,7 @@ void HumanObject::GetIndex(int i, int *node) {
 
 
 // 모든 face 번호를 반환
-// @param
+// @ params
 // [out] node
 void HumanObject::GetIndices(int *node) {
 	int i = 0;
@@ -1997,7 +2699,49 @@ void HumanObject::GetIndices(int *node) {
 
 
 /////// Bounding / Collision
+// 지정된 이름의 파트번호
+// @ params
+// [in] name
+int HumanObject::GetSegmentNum(char* name) {
+	/*
+	if (!strcmp(name, "Head")) {
 
+	}
+	*/
+	return 0;
+}
+
+// i번째 부위의 시작점 좌표
+// @ params
+// [in] i
+// [out] coord
+void HumanObject::GetSegmentOrigin(int i, float* coord) {
+
+}
+
+// i번째 부위의 종점 좌표
+// @ params
+// [in] i
+// [out] coord
+void HumanObject::GetSegmentTermination(int i, float* coord) {
+
+}
+
+// i번째 부위에 속한 vertex들의 indices
+// @ params
+// [in] i
+// [out] nums
+void HumanObject::GetSegmentVertIndices(int i, int* nums) {
+
+}
+
+// i번째 부위에 속한 vertex들의 좌표들
+// @ params
+// [in] i
+// [out] coord
+void HumanObject::GetSegmentVertPos(int i, float* coord) {
+
+}
 
 
 /////// Pose
@@ -2172,167 +2916,6 @@ void HumanObject::RenderTexture() {
 	// 정점, 법선, 텍스처 버퍼를 재생성 한다.
 	if (m_VertBuf.empty())
 		UpdateVertBuff();
-	/*
-	if (m_NormBuf.empty())
-		UpdateNormBuff();
-	if (m_TexBuf.empty())
-		UpdateTexBuff();
-	*/
 
-	/*
-	// 텍스처 매핑 옵션을 설정하고
-	glEnable(GL_TEXTURE_2D);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-	// 폴리곤 오프셋 활성화 하고
-	glEnable(GL_POLYGON_OFFSET_FILL);
-	glPolygonOffset(1.0, 1.0);
-
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_NORMAL_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-
-	static mjMaterial Mtl("default");
-	std::map<std::string, std::vector<float>>::iterator it0 = m_VertBuf.begin();
-	std::map<std::string, std::vector<float>>::iterator it1 = m_NormBuf.begin();
-	std::map<std::string, std::vector<float>>::iterator it2 = m_TexBuf.begin();
-
-	for (; it0 != m_VertBuf.end(); it0++, it1++, it2++) {
-		mjMaterial *pMtl = GetMaterial(it0->first);
-
-		if (pMtl == NULL)
-			pMtl = &Mtl;
-		pMtl->Enable();
-
-		if (pMtl->m_Texture != NULL)
-			glBindTexture(GL_TEXTURE_2D, pMtl->m_Texture->m_Idx);
-
-		// 정점, 법선 배열을 지정하여 삼각형으로 렌더링 하고
-		// glVertexPointer(3, GL_FLOAT, 0, &(it->second[0]));
-		// glNormalPointer(GL_FLOAT, 0, &(it->second[0]));
-		// glTexCoordPointer(2, GL_FLOAT, 0, &(it->second[0]));
-		glDrawArrays(GL_TRIANGLES, 0, (int)it0->second.size() / 3);
-
-
-		pMtl->Disable();
-	}
-
-	glDisable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, NULL);
-
-
-	glDisable(GL_POLYGON_OFFSET_FILL);
-	*/
-
-	/*
-	// 정점, 법선, 텍스처 버퍼를 활성화 한다
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_NORMAL_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	// 재질에 따른 폴리곤 그룹을 렌더링 한다.
-	static EgMaterial Mtl("default");
-	std::map<std::string, std::vector<float>>::iterator it0 = m_VertexBuf.begin();
-	std::map<std::string, std::vector<float>>::iterator it1 = m_NormalBuf.begin();
-	std::map<std::string, std::vector<float>>::iterator it2 = m_TexelBuf.begin();
-	for (; it0 != m_VertexBuf.end(); it0++, it1++, it2++)
-	{
-		// 재질을 활성화 하여
-		EgMaterial *pMtl = GetMaterial(it0->first);
-		if (pMtl == NULL)
-			pMtl = &Mtl;
-		pMtl->Enable();
-
-		if (pMtl->m_pTexture != NULL)
-			glBindTexture(GL_TEXTURE_2D, pMtl->m_pTexture->m_TexId);
-
-		// 정점, 법선 배열을 지정하여 삼각형으로 렌더링 하고
-		glVertexPointer(3, GL_FLOAT, 0, &(it0->second[0]));
-		glNormalPointer(GL_FLOAT, 0, &(it1->second[0]));
-		glTexCoordPointer(2, GL_FLOAT, 0, &(it2->second[0]));
-		glDrawArrays(GL_TRIANGLES, 0, (int)it0->second.size() / 3);
-
-		// 재질을 비활성화 한다.
-		pMtl->Disable();
-	}
-
-	// 정점과 노말 버퍼를 해제한다.
-	glDisableClientState(GL_VERTEX_ARRAY);
-	glDisableClientState(GL_NORMAL_ARRAY);
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	// 폴리곤 오프셋을 비활성화 한다.
-	glDisable(GL_POLYGON_OFFSET_FILL);
-
-	// 텍스처 기능을 비활성화 한다.
-	glDisable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, NULL);
-	*/
 }
-
-/*
-void EgMesh::RenderTexture()
-{
-	// 정점, 법선, 텍스처 버퍼를 재생성 한다.
-	if (m_VertexBuf.empty())
-		UpdateVertexBuf();
-	if (m_NormalBuf.empty())
-		UpdateNormalBuf();
-	if (m_TexelBuf.empty())
-		UpdateTexelBuf();
-
-	// 텍스처 매핑 옵션을 설정하고
-	glEnable(GL_TEXTURE_2D);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-	// 폴리곤 오프셋 활성화 하고
-	glEnable(GL_POLYGON_OFFSET_FILL);
-	glPolygonOffset(1.0, 1.0);
-
-	// 정점, 법선, 텍스처 버퍼를 활성화 한다
-	glEnableClientState(GL_VERTEX_ARRAY);
-	glEnableClientState(GL_NORMAL_ARRAY);
-	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	// 재질에 따른 폴리곤 그룹을 렌더링 한다.
-	static EgMaterial Mtl("default");
-	std::map<std::string, std::vector<float>>::iterator it0 = m_VertexBuf.begin();
-	std::map<std::string, std::vector<float>>::iterator it1 = m_NormalBuf.begin();
-	std::map<std::string, std::vector<float>>::iterator it2 = m_TexelBuf.begin();
-	for (; it0 != m_VertexBuf.end(); it0++, it1++, it2++)
-	{
-		// 재질을 활성화 하여
-		EgMaterial *pMtl = GetMaterial(it0->first);
-		if (pMtl == NULL)
-			pMtl = &Mtl;
-		pMtl->Enable();
-
-		if (pMtl->m_pTexture != NULL)
-			glBindTexture(GL_TEXTURE_2D, pMtl->m_pTexture->m_TexId);
-
-		// 정점, 법선 배열을 지정하여 삼각형으로 렌더링 하고
-		glVertexPointer(3, GL_FLOAT, 0, &(it0->second[0]));
-		glNormalPointer(GL_FLOAT, 0, &(it1->second[0]));
-		glTexCoordPointer(2, GL_FLOAT, 0, &(it2->second[0]));
-		glDrawArrays(GL_TRIANGLES, 0, (int)it0->second.size() / 3);
-
-		// 재질을 비활성화 한다.
-		pMtl->Disable();
-	}
-
-	// 정점과 노말 버퍼를 해제한다.
-	glDisableClientState(GL_VERTEX_ARRAY);
-	glDisableClientState(GL_NORMAL_ARRAY);
-	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
-
-	// 폴리곤 오프셋을 비활성화 한다.
-	glDisable(GL_POLYGON_OFFSET_FILL);
-
-	// 텍스처 기능을 비활성화 한다.
-	glDisable(GL_TEXTURE_2D);
-	glBindTexture(GL_TEXTURE_2D, NULL);
-}
-*/
-
 

@@ -17,7 +17,8 @@ class mjPos3;
 class mjVec2;
 class mjVec3;
 
-class mjLine3;
+class mjLine;
+class mjPlane;
 
 class mjMatrix;
 class mjQuaternion;
@@ -60,6 +61,7 @@ public:
 public:
 	//////////////////// Constructor & Deconstructor
 	mjPos3(float _x = 0.0f, float _y = 0.0f, float _z = 0.0f);
+	mjPos3(mjVec3 v);
 	mjPos3(const mjPos3 &cpy);
 	~mjPos3();
 
@@ -131,6 +133,7 @@ public:
 	//////////////////// Constructor & Deconstructor
 	mjVec3(float _x = 0.0f, float _y = 0.0f, float _z = 0.0f);
 	mjVec3(mjPos3 *start, mjPos3 *end);
+	mjVec3(mjPos3 p);
 	mjVec3(const mjVec3 &cpy);
 	~mjVec3();
 
@@ -139,6 +142,7 @@ public:
 	mjVec3 &set(float _x, float _y, float _z);
 	mjVec3 &normalize();
 	float length();
+	float sum();
 
 
 	//////////////////// Operator overload
@@ -159,20 +163,40 @@ public:
 };
 
 
-class mjLine3 {
+class mjLine {
 public:
-	mjLine3();
-	mjLine3(mjVec3 *dir, mjPos3 *pos);
-	mjLine3(const mjLine3 &cpy);
-	~mjLine3();
+	mjLine();
+	mjLine(mjVec3 dir, mjPos3 pos);
+	mjLine(mjPos3 p, mjPos3 q);
+	mjLine(const mjLine &cpy);
+	~mjLine();
 	
 public:
 	// 직선의 방향
-	mjVec3 *m_Dir;
+	mjVec3 m_Dir;
 
 	// 직선 위 임의의 한 점
-	mjPos3 *m_Pos; 
+	mjPos3 m_Pos; 
 };
+
+
+class mjPlane {
+public: 
+	mjPos3 m_Pos;
+	mjVec3 m_Normal; // Not an unit vector
+
+	float d;
+
+public:
+	mjPlane();
+	mjPlane(mjPos3 p, mjPos3 q, mjPos3 r);
+	mjPlane(const mjPlane& pln);
+	~mjPlane();
+
+	bool IsAbove(mjPos3);
+	bool IsBelow(mjPos3);
+};
+
 
 // 4 x 4 matrix
 class mjMatrix4x4 {

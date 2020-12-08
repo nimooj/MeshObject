@@ -1,6 +1,6 @@
 #pragma once
 
-#define Bone_Num 33
+#define Bone_Num 35
 
 #define Bone_neck 0
 #define Bone_spine3 1
@@ -35,3 +35,6 @@
 #define Bone_lowerLegL 30
 #define Bone_ribR 31
 #define Bone_ribL 32
+
+#define Bone_handR 33
+#define Bone_handL 34
