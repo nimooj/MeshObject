@@ -237,11 +237,20 @@ public:
 	HumanObject *m_Human;
 	std::vector<mjBone *> *m_Bones;
 	std::vector<mjJoint *> *m_Joints;
+	
+
+	// Helper joint와 bone을 추가한다 (Body Segmentation용) :: 몸통에 속한 점이 팔 그룹에 붙는 문제 해결
+	std::vector<mjBone *> *m_HelperBones;
+	std::vector<mjJoint *> *m_HelperJoints;
 
 public:
 	void SetHierarchy(int type = 0);
+
 	void AddJoint(int idx, mjJoint *joint);
 	void AddBone(int idx, mjBone *bone);
+
+	void AddHelperJoint(int idx, mjJoint *joint);
+	void AddHelperBone(int idx, mjBone *bone);
 };
 
 #define Length 0
@@ -417,7 +426,7 @@ public:
 
 	// tmp for sizing functions (20. 8. 22)
 	// 해당 Bone segment에 속하는 vertex들을 갖는다
-	std::vector<mjVertex *> m_Segment[Bone_Num];
+	std::vector<mjVertex *> m_Segment[Total_Bone_Num];
 
 public:
 	/////// Member functions

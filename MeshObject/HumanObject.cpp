@@ -23,19 +23,45 @@ float dist(mjVec3 &v, mjVec3 &w) {
 	return sqrt(pow(v.x - w.x , 2) + pow(v.y - w.y, 2) + pow(v.z - w.z, 2));
 }
 
+float circ(std::vector<mjPos3> c) {
+	float distance = 0;
+	if (!c.empty()) {
+		for (int i = 1; i < c.size(); i++) {
+			distance += dist(c[i - 1], c[i]);
+		}
+		distance += dist(c[0], c[c.size() - 1]);
+	}
+
+	return distance;
+}
+
+// @param[in] p : 선분 밖의 한 점
+// @param[in] v : 선분의 시작점
+// @param[in] w : 선분의 끝점
+mjPos3 projectToLineSegment(mjPos3 &p, mjPos3 &v, mjPos3 &w) {
+	mjLine l = mjLine(v, w);
+
+	float len = (v * l.m_Dir).sum();
+
+	if (len == 0)
+		return 0;
+
+	float t = ((p - v) * l.m_Dir).sum() / len;
+	
+	if (t > 0 && t < 1)
+		return v + t * l.m_Dir;
+	else if (t <= 0)
+		return v;
+	else if (t >= 1)
+		return w;
+}
+
 // @param[in] p : 선분 밖의 한 점
 // @param[in] v : 선분의 시작점
 // @param[in] w : 선분의 끝점
 float distToLineSegment(mjPos3 &p, mjPos3 &v, mjPos3 &w) {
-	mjVec3 vw = w - v;
-	float l2 = pow(vw.length(), 2);
-	// v == w일 경우
-	if (l2 == 0) 
-		return dist(v, p);
+	mjPos3 projection = projectToLineSegment(p, v, w);
 
-	mjVec3 dotProduct = (p - v) * vw;
-	float t = MAX(0, MIN(1, (dotProduct.x + dotProduct.y + dotProduct.z) / l2));
-	mjVec3 projection = v + t * vw;
 	return dist(p, projection);
 }
 
@@ -47,8 +73,9 @@ bool get_intersection(mjPlane &pln, mjPos3 &p, mjPos3 &q, mjPos3 &intersection) 
 
 	float t = -(dot2 + pln.d) / dot1;
 
-	if (t >= 0.0 && t <= 1.0) {
-		intersection = mjPos3(l.m_Pos + (t * l.m_Dir));
+	if (ABS(t) >= 0.0 && ABS(t) <= 1.0) {
+		intersection = mjPos3(l.m_Pos + t * l.m_Dir);
+		printf("Intersection : (%f, %f, %f)\n", intersection.x, intersection.y, intersection.z);
 		return true;
 	}
 
@@ -68,6 +95,7 @@ bool intersect_plane_mesh(mjPlane &pln, mjPos3 &p0, mjPos3 &p1, mjPos3 &p2, std:
 	// p0 ~ p1
 	if ((pln.IsAbove(p0) && pln.IsBelow(p1)) || 
 		(pln.IsBelow(p0) && pln.IsAbove(p1))) {
+
 		if (get_intersection(pln, p0, p1, intersection)) {
 			intersections.push_back(intersection);
 		}
@@ -92,6 +120,16 @@ bool intersect_plane_mesh(mjPlane &pln, mjPos3 &p0, mjPos3 &p1, mjPos3 &p2, std:
 	return true;
 }
 
+template <typename T>
+bool find(T n, std::vector<T> vec) {
+	for (T v : vec) {
+		if (v == n)
+			return true;
+	}
+
+	return false;
+}
+
 //////////////////////////////////////////////////////////////////////////////////
 //	 								mjVertex									// 
 //////////////////////////////////////////////////////////////////////////////////
@@ -105,6 +143,8 @@ mjVertex::mjVertex(float x, float y, float z) {
 
 	m_Texel = new mjTexel();
 	m_Normal = new mjNormal();
+
+	m_Segment = -1;
 }
 
 mjVertex::mjVertex(const mjVertex& cpy) {
@@ -112,6 +152,7 @@ mjVertex::mjVertex(const mjVertex& cpy) {
 	m_Coord = cpy.m_Coord;
 	m_Texel = cpy.m_Texel;
 	m_Normal = cpy.m_Normal;
+	m_Segment = cpy.m_Segment;
 }
 
 mjVertex::~mjVertex() {
@@ -120,7 +161,7 @@ mjVertex::~mjVertex() {
 
 bool mjVertex::In(std::vector<mjVertex*> seg) {
 	for (mjVertex* v : seg) {
-		if (this == v)
+		if (m_Idx == v->m_Idx)
 			return true;
 	}
 	return false;
@@ -473,15 +514,24 @@ void mjBone::AddVertexWeight(mjVertex *v, float w) {
 mjSkeleton::mjSkeleton() {
 	m_Bones = new std::vector<mjBone *>(Bone_Num);
 	m_Joints = new std::vector<mjJoint *>(Joint_Num);
+
+	m_HelperBones = new std::vector<mjBone *>(8);
+	m_HelperJoints = new std::vector<mjJoint *>(8);
 }
 
 mjSkeleton::mjSkeleton(const mjSkeleton& cpy) {
 	m_Bones = cpy.m_Bones;
 	m_Joints = cpy.m_Joints;
+
+	m_HelperBones = cpy.m_HelperBones;
+	m_HelperJoints = cpy.m_HelperJoints;
 }
 
 mjSkeleton::~mjSkeleton() {
-
+	delete m_Bones;
+	delete m_Joints;
+	delete m_HelperBones;
+	delete m_HelperJoints;
 }
 
 // @params 
@@ -504,6 +554,21 @@ void mjSkeleton::AddBone(int idx, mjBone *bone) {
 	bone->SetSkeleton(this);
 
 	(*m_Bones)[idx] = bone;
+}
+
+void mjSkeleton::AddHelperJoint(int idx, mjJoint *joint) {
+	joint->m_Idx = m_Joints->size() + idx;
+	joint->SetHuman(m_Human);
+
+	(*m_HelperJoints)[idx] = joint;
+}
+
+void mjSkeleton::AddHelperBone(int idx, mjBone *bone) {
+	bone->m_Idx = m_Bones->size() + idx;
+	bone->SetHuman(m_Human);
+	bone->SetSkeleton(this);
+
+	(*m_HelperBones)[idx] = bone;
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -571,8 +636,119 @@ bool mjLandmark::HasSegment(int idx) {
 	return false;
 }
 
-bool sortByPosAngle(std::tuple<float, mjPos3> a, std::tuple<float, mjPos3> b) {
-	return std::get<0>(a) < std::get<0>(b);
+// XZ 평면
+// @params
+// @ pivot [in] : 기울기 비교의 기준이 되는 점
+// @ left [in] : Sorting되지 않은 점들
+// @ right [in] : Sorting되지 않은 점들
+/// @ result [out] :  pivot과의 기울기가 오름차순으로 정렬된 점들의 벡터
+std::vector<mjPos3> SortandMerge(mjPos3 pivot, std::vector<mjPos3> left, std::vector<mjPos3> right) {	
+	std::vector<mjPos3> result;
+	int rightIdx = 0, leftIdx = 0;
+	
+	while (true) {
+		if (rightIdx >= right.size() && leftIdx >= left.size())
+			break;
+
+		// 오른쪽에 들어있는 애들이 다 끝났으면 남은 왼쪽 애들을 쭈르륵 넣고 끝낸다
+		if (rightIdx >= right.size()) {
+			result.insert(result.end(), left.begin() + leftIdx, left.end());
+			break;
+		}
+
+		// 왼쪽에 들어있는 애들이 다 끝났으면 남은 오른쪽 애들을 쭈르륵 넣고 끝낸다
+		if (leftIdx >= left.size()) {
+			result.insert(result.end(), right.begin() + rightIdx, right.end());
+			break;
+		}
+
+		float slopeWithRight = 0, slopeWithLeft = 0;
+		if (!EQUAL(pivot.x, right[rightIdx].x)) {
+			slopeWithRight = (pivot.x > right[rightIdx].x) ?
+				(pivot.z - right[rightIdx].z) / (pivot.x - right[rightIdx].x) 
+				: (right[rightIdx].z - pivot.z) / (right[rightIdx].x - pivot.x);
+		}
+
+		if (!EQUAL(pivot.x, left[leftIdx].x)) {
+			slopeWithLeft = (pivot.x > left[leftIdx].x) ? 
+				(pivot.z - left[leftIdx].z) / (pivot.x - left[leftIdx].x) 
+				: (left[leftIdx].z - pivot.z) / (left[leftIdx].x - pivot.x);
+		}
+
+		if (slopeWithRight < slopeWithLeft) {
+			result.push_back(right[rightIdx]);
+			rightIdx++;
+		}
+
+		else {
+			result.push_back(left[leftIdx]);
+			leftIdx++;
+		}
+	}
+
+	return result;
+}
+
+// @params
+// @ pivot [in] : 기울기 비교의 기준이 되는 점
+// @ awry [in] : Sorting되지 않은 점들
+/// @ result [out] : pivot과의 기울기가 오름차순으로 정렬된 점들의 벡터
+std::vector<mjPos3> Divide(mjPos3 pivot, std::vector<mjPos3> awry) {
+	if (awry.size() <= 1) {
+		return awry;
+	}
+
+	// DIVIDE
+	std::vector<mjPos3> right, left;
+
+	for (int i = 0; i < awry.size(); i++) {
+		if (i < awry.size()/2) {
+			left.push_back(awry[i]);
+		}
+		else {
+			right.push_back(awry[i]);
+		}
+	}
+
+	// Pivot과의 기울기 비교해서 오름차순으로 merge
+	left = Divide(pivot, left);
+	right = Divide(pivot, right);
+
+	// CONQUER
+	return SortandMerge(pivot, left, right);
+}
+
+// @params
+// @ start [in] : Merge sort의 pivot이 되는 점
+// @ awry [in] : Sorting되지 않은 점들
+/// @ result [out] : 정렬된 Merge된 결과 점들
+std::vector<mjPos3> MergeSort(mjPos3 pivot, std::vector<mjPos3> awry) {		
+	return Divide(pivot, awry);
+}
+
+// @params
+// @ type [in] : Sort의 기준 평면 ( 0 : XY 평면, 1 : YZ 평면, 2 : XZ 평면)
+// @ awry [in] : 정렬되지 않은 벡터
+/// @ result [out] : 정렬된 벡터
+std::vector<mjPos3> SortWithAngle(int type, std::vector<mjPos3> awry) {
+	if (type == 0) {
+		mjPos3 minZ = mjPos3(0, 0, INFINITY);
+
+		// minZ값을 구하고
+		for (mjPos3 p : awry) {
+			if (p.z < minZ.z)
+				minZ = p;
+		}
+
+		// 나뉜 점들과 minZ의 기울기를 기준으로 merge sort
+		return MergeSort(minZ, awry);
+	}
+	else if (type == 1) {
+
+	}
+	else if (type == 2) {
+
+	}
 }
 
 float mjLandmark::CalcSize() {
@@ -593,7 +769,8 @@ float mjLandmark::CalcSize() {
 			// Check if all verts exist in the segment
 			bool allIn = false;
 			for (int i = 0; i < m_SegmentIdx.size(); i++) {
-				if (v0->In(m_Human->m_Segment[i]) || v1->In(m_Human->m_Segment[i]) || v2->In(m_Human->m_Segment[i])) {
+
+				if (v0->In(m_Human->m_Segment[m_SegmentIdx[i]]) && v1->In(m_Human->m_Segment[m_SegmentIdx[i]]) && v2->In(m_Human->m_Segment[m_SegmentIdx[i]])) {
 					allIn = true;
 				}
 			}
@@ -611,60 +788,16 @@ float mjLandmark::CalcSize() {
 				circPos.insert(circPos.end(), intersections.begin(), intersections.end());
 			}
 		}
+		printf("CircPos : %d\n", circPos.size());
 
 		if (circPos.empty()) {
 			printf("\nNo intersections!\n");
 			return m_Value;
 		}
 
-		// centerPos 기준으로 centerPos ~ p, centerPos의 x축 방향이랑 이루는 각도를 오름차순 정렬
-		printf("\nintersections size: %d\n", circPos.size());
-		for (mjPos3 p : circPos) {
-			printf("%f %f %f\n", p.x, p.y, p.z);
-
-			centerPos.x += p.x;
-			centerPos.y += p.y;
-			centerPos.z += p.z;
-		}
-		centerPos.x /= circPos.size();
-		centerPos.y /= circPos.size();
-		centerPos.z /= circPos.size();
-
-		mjPos3 centerPos_x = centerPos;
-		centerPos_x.x += 1.0;
-		mjVec3 m = centerPos_x - centerPos;
-
-		std::vector<std::tuple<float, mjPos3>> alignedCirc;
-		for (mjPos3 p : circPos) {
-			mjVec3 l = p - centerPos;
-
-			mjVec3 dotProduct = l * m;
-			float dotSum = dotProduct.x + dotProduct.y + dotProduct.z;
-
-			float angle = (dotSum / (l.length() * m.length())) * 180 / M_PI;
-
-			alignedCirc.push_back(std::make_tuple(angle, p));
-		}
-
-		// 오름차순 정렬
-		std::sort(alignedCirc.begin(), alignedCirc.end(), sortByPosAngle);
-
-		// distance로 거리 구하기
-		float girth = 0;
-		printf("\n=========================================================\nAligned circ : ");
-		m_RelatedPos.push_back(std::get<1>(alignedCirc[0]));
-		for (int i = 1; i < alignedCirc.size(); i++) {
-			float angle = std::get<0>(alignedCirc[i]);
-			mjPos3 p = std::get<1>(alignedCirc[i]);
-			// printf("%f : %f %f %f\n", angle, p.x, p.y, p.z);
-			girth += dist(std::get<1>(alignedCirc[i]), std::get<1>(alignedCirc[i - 1]));
-			m_RelatedPos.push_back(std::get<1>(alignedCirc[i]));
-		}
-		girth += dist(std::get<1>(alignedCirc[0]), std::get<1>(alignedCirc[alignedCirc.size() - 1]));
-		printf("New circ: %f\n", girth);
-		printf("=========================================================\n");
-
-		m_Value = girth;
+		m_RelatedPos = SortWithAngle(0, circPos);
+		m_Value = circ(m_RelatedPos);
+		printf("New size : %f\n", m_Value);
 	}
 	else if (m_Type == Length) {
 		// ToDo::손끝은 lowerJoint가 없어서 포함안될듯 ?
@@ -730,7 +863,7 @@ void mjLandmark::DeformLengthType(float nval) {
 }
 
 void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound) {
-	std::cout << "Girth type deformation... ";
+	std::cout << "Girth type deformation... " << std::endl;
 	float scale = nval / m_Value;
 
 	// upperBound와 lowerBound 사이에서 
@@ -1418,7 +1551,8 @@ bool HumanObject::LoadJoints(const char* fname) {
 	int idx = 0;
 	float x, y, z;
 	while (fscanf_s(fp, "%f%f%f", &x, &y, &z) != EOF) {
-		m_Skeleton->AddJoint(idx, create_Joint(x, y, z));
+		// CHECK :: 중앙수준으로 이동
+		m_Skeleton->AddJoint(idx, create_Joint(x + (m_MinX + m_MaxX)/2, y, z));
 		idx++;
 	}
 
@@ -1763,7 +1897,10 @@ bool HumanObject::LoadHuman(const char* fname) {
 		else if (!strcmp(tag, "jo")) {
 			float x, y, z;
 			fscanf_s(fp, "%f%f%f", &x, &y, &z);
-			m_Skeleton->AddJoint(jointIdx, create_Joint(x, y, z));
+
+			// CHECK :: 중앙 수준으로 이동 ?
+			m_Skeleton->AddJoint(jointIdx, create_Joint(x + (minX + maxX)/2, y, z));
+
 			jointIdx++;
 		}
 
@@ -1940,29 +2077,158 @@ bool HumanObject::SetSkeleton() {
 	(*m_Skeleton->m_Bones)[Bone_handL]->isLeaf = true;
 
 	std::cout << "Successful!" << std::endl;
+
+
+
+	/************************************** HELPER JOINTS AND BONES GENERATION *****************************************/
+	float ribR_x = (*m_Skeleton->m_Joints)[Joint_ribR]->m_Coord->x;
+	float ribL_x = (*m_Skeleton->m_Joints)[Joint_ribL]->m_Coord->x;
+
+	mjJoint *joint = (*m_Skeleton->m_Joints)[Joint_spine2];
+	m_Skeleton->AddHelperJoint(HelperJoint_spine2R, create_Joint(ribR_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperJoint(HelperJoint_spine2L, create_Joint(ribL_x, joint->m_Coord->y, joint->m_Coord->z));
+
+	m_Skeleton->AddHelperBone(HelperBone_spine2R, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_spine2R]));
+	m_Skeleton->AddHelperBone(HelperBone_spine2L, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_spine2L]));
+
+	joint = (*m_Skeleton->m_Joints)[Joint_spine1];
+	m_Skeleton->AddHelperJoint(HelperJoint_spine1R, create_Joint(ribR_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperJoint(HelperJoint_spine1L, create_Joint(ribL_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperBone(HelperBone_spine1R, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_spine1R]));
+	m_Skeleton->AddHelperBone(HelperBone_spine1L, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_spine1L]));
+
+	joint = (*m_Skeleton->m_Joints)[Joint_spine];
+	m_Skeleton->AddHelperJoint(HelperJoint_spineR, create_Joint(ribR_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperJoint(HelperJoint_spineL, create_Joint(ribL_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperBone(HelperBone_spineR, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_spineR]));
+	m_Skeleton->AddHelperBone(HelperBone_spineL, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_spineL]));
+
+	joint = (*m_Skeleton->m_Joints)[Joint_waist];
+	m_Skeleton->AddHelperJoint(HelperJoint_waistR, create_Joint(ribR_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperJoint(HelperJoint_waistL, create_Joint(ribL_x, joint->m_Coord->y, joint->m_Coord->z));
+	m_Skeleton->AddHelperBone(HelperBone_waistR, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_waistR]));
+	m_Skeleton->AddHelperBone(HelperBone_waistL, create_Bone(joint, (*m_Skeleton->m_HelperJoints)[HelperJoint_waistL]));
+	/*******************************************************************************************************************/
 }
 
 bool HumanObject::SetSegment() {
 	std::cout << "Setting Segments... " << std::endl;
+
+	std::vector<mjBone *> totalBones;
+
+	totalBones.insert(totalBones.end(), m_Skeleton->m_HelperBones->begin(), m_Skeleton->m_HelperBones->end());
+	// totalBones.insert(totalBones.end(), m_Skeleton->m_Bones->begin(), m_Skeleton->m_Bones->end());
+	// 수동 순서 지정
+	/*
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_pelvis]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_waist]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine1]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine2]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine3]);
+	*/
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_neck]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_ribR]);
+	/*
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_ribL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_pelvisR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_pelvisL]);
+	*/
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_hipR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_hipL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLegR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLeg1R]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerLegR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLegL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLeg1L]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerLegL]);
+
+
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_collarboneR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_shoulderR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArmR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArm1R]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArmR]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm1R]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm2R]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_handR]);
+
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_collarboneL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_shoulderL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArmL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArm1L]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArmL]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm1L]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm2L]);
+	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_handL]);
+
+	// 팔 그룹 처리
+	std::vector<int> armR, armL;
+	armR.push_back(Bone_shoulderR);
+	armR.push_back(Bone_upperArmR);
+	armR.push_back(Bone_upperArm1R);
+	armR.push_back(Bone_lowerArmR);
+	armR.push_back(Bone_lowerArm1R);
+	armR.push_back(Bone_lowerArm2R);
+	armR.push_back(Bone_handR);
+
+	// mjPos3 boundR = ((*(*m_Skeleton->m_Joints)[Joint_handR]->m_Coord) + 2 * (*(*m_Skeleton->m_Joints)[Joint_ribR]->m_Coord)) / 3;
+	mjPos3 armpitR = *(*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord;
+	armpitR.y -= 20.0;
+	mjPos3 boundR = *(*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord;
+	boundR.x -= 10.0;
+	boundR.y = (*m_Skeleton->m_Joints)[Joint_handR]->m_Coord->y;
+	mjPos3 tmpR = boundR;
+	tmpR.z += 10;
+	mjPlane rightPlane(armpitR, boundR, tmpR);
+
+	armL.push_back(Bone_shoulderL);
+	armL.push_back(Bone_upperArmL);
+	armL.push_back(Bone_upperArm1L);
+	armL.push_back(Bone_lowerArmL);
+	armL.push_back(Bone_lowerArm1L);
+	armL.push_back(Bone_lowerArm2L);
+	armL.push_back(Bone_handL);
+
+	// mjPos3 boundL = ((*(*m_Skeleton->m_Joints)[Joint_handL]->m_Coord) + 2 * (*(*m_Skeleton->m_Joints)[Joint_ribL]->m_Coord)) / 3;
+	mjPos3 armpitL = *(*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord;
+	armpitL.y -= 20.0;
+	mjPos3 boundL = *(*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord;
+	boundL.x += 10.0;
+	boundL.y = (*m_Skeleton->m_Joints)[Joint_handL]->m_Coord->y;
+	mjPos3 tmpL = boundL;
+	tmpL.z += 10;
+	mjPlane leftPlane(armpitL, tmpL, boundL);
+
 
 	// 각 Bone에 가까운 점들로 Segment를 구성한다
 	for (mjVertex *v : *m_Vertices) {
 		int closestBoneIdx = -1;
 		float minDistance = INFINITY;
 
-		for (mjBone *b : (*m_Skeleton->m_Bones)) {
+		for (mjBone *b : totalBones) {
 			mjPos3 upperJoint = *b->m_UpperJoint->m_Coord;
 			mjPos3 lowerJoint = *b->m_LowerJoint->m_Coord;
 
 			float distance = distToLineSegment(*v->m_Coord, upperJoint, lowerJoint);
 
 			if (distance < minDistance) {
+				if (find(b->m_Idx, armR)) {
+					if (rightPlane.IsBelow(*v->m_Coord)) {
+						continue;
+					}
+				}
+				else if (find(b->m_Idx, armL)) {
+					if (leftPlane.IsBelow(*v->m_Coord)) {
+						continue;
+					}
+				}
 				closestBoneIdx = b->m_Idx;
 				minDistance = distance;
 			}
 		}
 
-		if (closestBoneIdx != -1) {
+		if (closestBoneIdx != -1 && v->m_Segment == -1) {
 			m_Segment[closestBoneIdx].push_back(v);
 			v->m_Segment = closestBoneIdx;
 		}
@@ -1971,6 +2237,7 @@ bool HumanObject::SetSegment() {
 			return false;
 		}
 	}
+
 
 	UpdateVertBuff();
 
@@ -2274,11 +2541,49 @@ void HumanObject::UpdateVertBuff() {
 	m_VertBuf.clear();
 
 	// Generate rand colors for segments
-	float r[Bone_Num], g[Bone_Num], b[Bone_Num];
-	for (int i = 0; i < Bone_Num; i++) {
+	float r[Total_Bone_Num], g[Total_Bone_Num], b[Total_Bone_Num];
+	for (int i = 0; i < Total_Bone_Num; i++) {
 		r[i] = rand() / double(RAND_MAX);
 		g[i] = rand() / double(RAND_MAX);
 		b[i] = rand() / double(RAND_MAX);
+
+		/*
+		r[i] = 0;
+		g[i] = 0;
+		b[i] = 0;
+
+		if (i == Bone_spine) {
+			r[i] = 1;
+			g[i] = 0;
+			b[i] = 0;
+		}
+		else if (i == Bone_waist) {
+			r[i] = 0;
+			g[i] = 1;
+			b[i] = 0;
+		}
+		else if (i == Bone_ribR) {
+			r[i] = 0;
+			g[i] = 0;
+			b[i] = 1;
+		}
+		else if (i == Bone_ribL) {
+			r[i] = 1;
+			g[i] = 1;
+			b[i] = 0;
+		}
+		else if (i == Bone_upperArmR) {
+			r[i] = 0;
+			g[i] = 0;
+			b[i] = 1;
+		}
+		else if (i == Bone_pelvis) {
+			r[i] = 1;
+			g[i] = 1;
+			b[i] = 0;
+
+		}
+		*/
 	}
 
 
@@ -2414,12 +2719,12 @@ void HumanObject::SetSizes(float *sizes) {
 // @param[in] i : i번째 랜드마크
 // @param[in] value : 변형되기를 원하는 치수
 void HumanObject::SetSize(int i, float value) {
-	std::cout << "Setting size... ";
+	std::cout << "Setting size... " << std::endl;
 
 	mjLandmark *thisLandmark = (*m_Landmarks)[i];
 	// i번째 랜드마크가 Girth일 경우,
 	if (thisLandmark->m_Type == Girth) {
-		std::cout << "Landmark Girth type... ";
+		std::cout << "Landmark Girth type... " << std::endl;
 		// Girth 타입을 갖는 랜드마크들의 level을 비교하여
 		// 해당 랜드마크 바로 위, 아래 level을 갖는 level를 각각 upperBound, lowerBound로 정의한다
 		float upperBound = m_BoundingBox->m_MaxY,
@@ -2516,13 +2821,28 @@ void HumanObject::SetSize(int i, float value) {
 			}
 		}
 		if (i == Waist && thisLandmark->GetSegments().empty()) {
+			/*
 			thisLandmark->SetSegment(Bone_neck);
 			thisLandmark->SetSegment(Bone_spine3);
+			*/
 			thisLandmark->SetSegment(Bone_spine2);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_spine2R);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_spine2L);
+
 			thisLandmark->SetSegment(Bone_spine1);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_spine1R);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_spine1L);
+
 			thisLandmark->SetSegment(Bone_spine);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_spineR);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_spineL);
 			thisLandmark->SetSegment(Bone_waist);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_waistR);
+			thisLandmark->SetSegment(Bone_Num + HelperBone_waistL);
 			thisLandmark->SetSegment(Bone_pelvis);
+
+			// thisLandmark->SetSegment(Bone_ribR);
+			// thisLandmark->SetSegment(Bone_ribL);
 
 			thisLandmark->SetSegment(Bone_pelvisR);
 			thisLandmark->SetSegment(Bone_hipR);
@@ -2536,13 +2856,13 @@ void HumanObject::SetSize(int i, float value) {
 			thisLandmark->SetSegment(Bone_upperLeg1L);
 			thisLandmark->SetSegment(Bone_lowerLegL);
 
+			/*
 			thisLandmark->SetSegment(Bone_collarboneR);
 			thisLandmark->SetSegment(Bone_collarboneL);
 			thisLandmark->SetSegment(Bone_shoulderR);
 			thisLandmark->SetSegment(Bone_shoulderL);
+			*/
 
-			thisLandmark->SetSegment(Bone_ribR);
-			thisLandmark->SetSegment(Bone_ribL);
 		}
 		if (i == Hip && thisLandmark->GetSegments().empty()) {
 			thisLandmark->SetSegment(Bone_spine);
@@ -2566,7 +2886,7 @@ void HumanObject::SetSize(int i, float value) {
 	}
 	// i번째 랜드마크가 Length일 경우,
 	else if (thisLandmark->m_Type == Length) {
-		std::cout << "Landmark Length type... ";
+		std::cout << "Landmark Length type... " << std::endl;
 
 		// 각 segment를 구성하는 bone vector에 따라 scale을 수행한다
 		// Shoulder length 경우, 가로 길이이기 때문에 따로 처리 필요
@@ -2754,7 +3074,7 @@ float GetAngle(mjVec3 a, mjVec3 b) {
 
 	float acosRad = acos(dot.x + dot.y + dot.z);
 
-	degree = acosRad * (180 / M_PI);
+	degree = RADIAN2DEGREE(acosRad);
 
 	return degree;
 }
@@ -2771,7 +3091,7 @@ void HumanObject::SetTPose(int s) {
 	// float degree = abs(90 * s - GetAngle(arm_left, axis));
 	float degree = -90/2;
 
-	float radian = degree * M_PI / 180;
+	float radian = DEGREE2RADIAN(degree);
 
 	std::cout << "\nInitial Left Arm angle is " << GetAngle(arm_left, axis) << std::endl;
 	std::cout << "\nRotate by angle in degrees " << degree << " and in radians " << radian << std::endl;

@@ -8,7 +8,13 @@
 // Using glm types
 #include <glm/glm.hpp>
 
+#define EPSILON 1.192092896e-7
 #define INFINITY ((float)(_HUGE_ENUF * _HUGE_ENUF))
+
+#define ABS(x) ((x < 0.0) ? -(x) : x)
+#define DEGREE2RADIAN(x) (x * M_PI / 180.0)
+#define RADIAN2DEGREE(x) (x * 180.0 / M_PI)
+#define EQUAL(x, y) (ABS((x) - (y)) < EPSILON)
 
 // Class names
 class mjPos2;
