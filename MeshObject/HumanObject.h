@@ -9,22 +9,25 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 
+#ifndef STB_IMAGE_H
 #define STB_IMAGE_IMPLEMENTATION   // use of stb functions once and for all
 #include "stb_image.h"
+#endif
 
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <iostream>
 #include <map>
-#include <tuple>
 #include <algorithm>
 
-#include <glad/glad.h>
+// #include <glad/glad.h>
+#include <GL/freeglut.h>
 #include <GLFW/glfw3.h>
 
 #include "JointList.h"
 #include "BoneList.h"
+#include "BodySegmentList.h"
 
 #include "MeshObject.h"
 
@@ -55,8 +58,69 @@ class mjBoundingBox;
 
 class HumanObject;
 
+std::string BoneSegmentNames[Total_Bone_Num] = {
+	"Bone_neck",
+	"Bone_spine3",
+	"Bone_spine2",
+	"Bone_spine1",
+	"Bone_spine",
+	"Bone_waist",
+	"Bone_pelvis",
+	"Bone_collarboneR",
+	"Bone_shouldrR",
+	"Bone_upperArmR",
+	"Bone_upperArm1R",
+	"Bone_lowerArmR",
+	"Bone_lowerArm1R",
+	"Bone_lowerArm2R",
+	"Bone_collarboneL",
+	"Bone_shouldrL",
+	"Bone_upperArmL",
+	"Bone_upperArm1L",
+	"Bone_lowerArmL",
+	"Bone_lowerArm1L",
+	"Bone_lowerArm2L",
+	"Bone_pelvisR",
+	"Bone_hipR",
+	"Bone_upperLegR",
+	"Bone_upperLeg1R",
+	"Bone_loweLegR",
+	"Bone_pelvisL",
+	"Bone_hipL",
+	"Bone_upperLegL",
+	"Bone_upperLeg1L",
+	"Bone_loweLegL",
+	"Bone_ribR",
+	"Bone_ribL",
+	"Bone_handR",
+	"Bone_handL",
+	"HelperBone_spine2R",
+	"HelperBone_spine2L",
+	"HelperBone_spine1R",
+	"HelperBone_spine1L",
+	"HelperBone_spineR",
+	"HelperBone_spineL",
+	"HelperBone_waistR",
+	"HelperBone_waistL"
+};
 
-class mjVertex {
+
+std::string BodySegmentNames[BodySegment_Num] = {
+	"Head", // 0
+	"Neck", // 1
+	"TorsoUpper", // 2
+	"TorsoLower", // 3
+	"LegUpperR", // 4
+	"LegLowerR", // 5
+	"LegUpperL", // 6
+	"LegLowerL", // 7 
+	"ArmUpperR", // 8
+	"ArmLowerR", // 9 
+	"ArmUpperL", // 10
+	"ArmLowerL" // 11
+};
+
+class HUMANOBJECT_API mjVertex {
 public: 
 	int m_Idx;
 
@@ -64,7 +128,8 @@ public:
 	mjTexel *m_Texel;
 	mjNormal *m_Normal;
 
-	int m_Segment;
+	int m_BoneSegment;
+	int m_BodySegment;
 public: 
 	mjVertex(float x = 0.0f, float y = 0.0f, float z = 0.0f);
 	mjVertex(const mjVertex& cpy);
@@ -73,7 +138,7 @@ public:
 	bool In(std::vector<mjVertex*> seg);
 };
 
-class mjTexel {
+class HUMANOBJECT_API mjTexel {
 public: 
 	int m_Idx;
 	mjPos2 *m_Coord;
@@ -85,7 +150,7 @@ public:
 };
 
 
-class mjNormal {
+class HUMANOBJECT_API mjNormal {
 public:
 	int m_Idx;
 
@@ -99,7 +164,7 @@ public:
 };
 
 
-class mjEdge {
+class HUMANOBJECT_API mjEdge {
 public:
 	std::vector<mjVertex *> *m_Verts;
 
@@ -116,7 +181,7 @@ public:
 };
 
 
-class mjFace {
+class HUMANOBJECT_API mjFace {
 public:
 	//////////////////// Member Variables
 	int m_Idx;
@@ -172,7 +237,7 @@ public:
 };
 
 
-class mjJoint {
+class HUMANOBJECT_API mjJoint {
 public:
 	mjJoint(float _x = 0.0f, float _y = 0.0f, float _z = 0.0f);
 	mjJoint(const mjJoint &cpy);
@@ -187,7 +252,7 @@ public:
 	void SetHuman(HumanObject *h);
 };
 
-class mjBone {
+class HUMANOBJECT_API mjBone {
 public:
 	mjBone();
 	mjBone(mjJoint *upper, mjJoint *lower);
@@ -227,7 +292,7 @@ public:
 };
 
 
-class mjSkeleton {
+class HUMANOBJECT_API mjSkeleton {
 public:
 	mjSkeleton();
 	mjSkeleton(const mjSkeleton& cpy);
@@ -256,7 +321,7 @@ public:
 #define Length 0
 #define Girth 1
 
-class mjLandmark {
+class HUMANOBJECT_API mjLandmark {
 public:
 	mjLandmark(const char* name = "", int type = 0, float lvl = 0.0, float val = 0.0f);
 	mjLandmark(const mjLandmark& cpy);
@@ -273,7 +338,8 @@ public:
 	float m_Level; 
 	float m_Value;
 
-	std::vector<int> m_SegmentIdx; // Bone 기준의 segment
+	std::vector<int> m_BodySegmentIdx; // Body 기준의 segment
+
 	// std::vector<int> m_VertIdx;
 	std::vector<mjPos3> m_RelatedPos;
 
@@ -300,7 +366,7 @@ public:
 };
 
 
-class mjTexture {
+class HUMANOBJECT_API mjTexture {
 public:
 	mjTexture(int id, char* fname);
 	~mjTexture();
@@ -319,7 +385,7 @@ public:
 };
 
 
-class mjMaterial {
+class HUMANOBJECT_API mjMaterial {
 public:
 	/*! \brief 재질의 인덱스 */
 	int m_Idx;
@@ -359,7 +425,7 @@ public:
 	void Disable();
 };
 
-class mjBoundingBox {
+class HUMANOBJECT_API mjBoundingBox {
 public:
 	float m_MinX, m_MaxX;
 	float m_MinY, m_MaxY;
@@ -426,7 +492,11 @@ public:
 
 	// tmp for sizing functions (20. 8. 22)
 	// 해당 Bone segment에 속하는 vertex들을 갖는다
-	std::vector<mjVertex *> m_Segment[Total_Bone_Num];
+	std::vector<mjVertex *> m_BoneSegment[Total_Bone_Num];
+	std::vector<mjVertex *> m_BodySegment[BodySegment_Num];
+
+	// CHECK :: 일단 ABC region 분리용으로 제작
+	std::vector<mjVertex *> m_Region[3];
 
 public:
 	/////// Member functions
@@ -435,6 +505,11 @@ public:
 	bool LoadHuman(const char* fname);
 	bool LoadJoints(const char* fname);
 	bool LoadLandmarks(const char* fname);
+
+	bool LoadBodySegment(const char* fname);
+	// CHECK :: 일단 ABC region 분리용으로 제작
+	bool LoadABCRegion(const char* fname);
+	bool SegmentABC();
 
 
 	void AddVertex(mjVertex *v);
@@ -469,6 +544,9 @@ public:
 
 	bool WriteObj(const char* fname);
 	void WriteHuman(const char* fname);
+
+	void ExportBoneSegment(const char* fname);
+	void ExportBodySegment(const char* fname);
 
 	// void initHuman();
 
@@ -507,8 +585,12 @@ public:
 	/////// Geometry
 	int GetVertNum();
 	int GetFaceNum();
+
+	// i번째 정점 인스턴스 반환
+	mjVertex* GetVert(int i);
 	// i번째 정점의 좌표 반환
 	void GetVert(int i, float *coord);
+
 	// 전체 정점 좌표 반환
 	void GetVerts(float *coord);
 	// i번째 face의 번호를 반환
@@ -522,7 +604,9 @@ public:
 	// i번째 부위의 시작점 좌표
 	void GetSegmentOrigin(int i, float* coord);
 	// i번째 부위의 종점 좌표
-	void GetSegmentTermination(int i, float* coord);
+	void GetSegmentEnd(int i, float* coord);
+	// i번째 부위에 속한 vertex들의 갯수
+	int GetSegmentSize(int i);
 	// i번째 부위에 속한 vertex들의 indices
 	void GetSegmentVertIndices(int i, int* nums);
 	// i번째 부위에 속한 vertex들의 좌표들

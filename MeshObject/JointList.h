@@ -1,7 +1,8 @@
 #pragma once
 
-#define Joint_Num 36
-#define Total_Joint_Num 44
+#define Joint_Num 37
+#define Total_Joint_Num 45
+
 #define Joint_neck 0
 #define Joint_shoulderMid 1
 #define Joint_shoulderR 2
@@ -39,6 +40,8 @@
 
 #define Joint_handR 34
 #define Joint_handL 35
+
+#define Joint_head 36
 
 
 #define HelperJoint_spine2R 0

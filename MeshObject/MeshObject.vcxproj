@@ -180,6 +180,7 @@
     <None Include="Weight_Male" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BodySegmentList.h" />
     <ClInclude Include="BoneList.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="HumanObject.h" />

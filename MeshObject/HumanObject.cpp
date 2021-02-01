@@ -11,6 +11,17 @@
 #define LegLengthL 7
 #define ShoulderLength 8
 
+
+
+int getBodySegmentIndex(std::string sname) {
+	for (int i = 0; i < BodySegment_Num; i++) {
+		if (BodySegmentNames[i] == sname) 
+			return i;
+	}
+
+	return -1;
+}
+
 float dist(mjPos3 &a, mjPos3 &b) {
 	return sqrt(pow(a.x - b.x , 2) + pow(a.y - b.y, 2) + pow(a.z - b.z, 2));
 }
@@ -56,6 +67,7 @@ mjPos3 projectToLineSegment(mjPos3 &p, mjPos3 &v, mjPos3 &w) {
 		return w;
 }
 
+
 // @param[in] p : 선분 밖의 한 점
 // @param[in] v : 선분의 시작점
 // @param[in] w : 선분의 끝점
@@ -63,6 +75,24 @@ float distToLineSegment(mjPos3 &p, mjPos3 &v, mjPos3 &w) {
 	mjPos3 projection = projectToLineSegment(p, v, w);
 
 	return dist(p, projection);
+}
+
+// @param[in] v : 모델의 한 정점
+// @param[in] segments : 
+// @params[out] closest : 정점과 가장 가까운 세그멘트
+void get_closestSegment(mjVertex *v, std::vector<mjBone *> *segments, int &closest) {
+	float minDistance = INFINITY;
+	for (mjBone *s : *segments) {
+		mjPos3 upperJoint = *s->m_UpperJoint->m_Coord;
+		mjPos3 lowerJoint = *s->m_LowerJoint->m_Coord;
+
+		float distance = distToLineSegment(*v->m_Coord, upperJoint, lowerJoint);
+
+		if (distance < minDistance) {
+			closest = s->m_Idx;
+			minDistance = distance;
+		}
+	}
 }
 
 bool get_intersection(mjPlane &pln, mjPos3 &p, mjPos3 &q, mjPos3 &intersection) {
@@ -75,7 +105,7 @@ bool get_intersection(mjPlane &pln, mjPos3 &p, mjPos3 &q, mjPos3 &intersection) 
 
 	if (ABS(t) >= 0.0 && ABS(t) <= 1.0) {
 		intersection = mjPos3(l.m_Pos + t * l.m_Dir);
-		printf("Intersection : (%f, %f, %f)\n", intersection.x, intersection.y, intersection.z);
+		// printf("Intersection : (%f, %f, %f)\n", intersection.x, intersection.y, intersection.z);
 		return true;
 	}
 
@@ -144,7 +174,7 @@ mjVertex::mjVertex(float x, float y, float z) {
 	m_Texel = new mjTexel();
 	m_Normal = new mjNormal();
 
-	m_Segment = -1;
+	m_BoneSegment = -1;
 }
 
 mjVertex::mjVertex(const mjVertex& cpy) {
@@ -152,7 +182,7 @@ mjVertex::mjVertex(const mjVertex& cpy) {
 	m_Coord = cpy.m_Coord;
 	m_Texel = cpy.m_Texel;
 	m_Normal = cpy.m_Normal;
-	m_Segment = cpy.m_Segment;
+	m_BoneSegment = cpy.m_BoneSegment;
 }
 
 mjVertex::~mjVertex() {
@@ -557,14 +587,14 @@ void mjSkeleton::AddBone(int idx, mjBone *bone) {
 }
 
 void mjSkeleton::AddHelperJoint(int idx, mjJoint *joint) {
-	joint->m_Idx = m_Joints->size() + idx;
+	joint->m_Idx = Joint_Num + idx;
 	joint->SetHuman(m_Human);
 
 	(*m_HelperJoints)[idx] = joint;
 }
 
 void mjSkeleton::AddHelperBone(int idx, mjBone *bone) {
-	bone->m_Idx = m_Bones->size() + idx;
+	bone->m_Idx = Bone_Num + idx;
 	bone->SetHuman(m_Human);
 	bone->SetSkeleton(this);
 
@@ -601,7 +631,7 @@ void mjLandmark::SetHuman(HumanObject *h) {
 }
 
 void mjLandmark::SetSegment(int idx) {
-	m_SegmentIdx.push_back(idx);
+	m_BodySegmentIdx.push_back(idx);
 }
 
 int mjLandmark::GetIndex() {
@@ -621,7 +651,7 @@ std::string mjLandmark::GetName(int idx) {
 }
 
 std::vector<int> mjLandmark::GetSegments() {
-	return m_SegmentIdx;
+	return m_BodySegmentIdx;
 }
 
 float mjLandmark::GetSize() {
@@ -629,7 +659,7 @@ float mjLandmark::GetSize() {
 }
 
 bool mjLandmark::HasSegment(int idx) {
-	for (int i : m_SegmentIdx) {
+	for (int i : m_BodySegmentIdx) {
 		if (i == idx)
 			return true;
 	}
@@ -768,9 +798,9 @@ float mjLandmark::CalcSize() {
 
 			// Check if all verts exist in the segment
 			bool allIn = false;
-			for (int i = 0; i < m_SegmentIdx.size(); i++) {
+			for (int i = 0; i < m_BodySegmentIdx.size(); i++) {
 
-				if (v0->In(m_Human->m_Segment[m_SegmentIdx[i]]) && v1->In(m_Human->m_Segment[m_SegmentIdx[i]]) && v2->In(m_Human->m_Segment[m_SegmentIdx[i]])) {
+				if (v0->In(m_Human->m_BodySegment[m_BodySegmentIdx[i]]) && v1->In(m_Human->m_BodySegment[m_BodySegmentIdx[i]]) && v2->In(m_Human->m_BodySegment[m_BodySegmentIdx[i]])) {
 					allIn = true;
 				}
 			}
@@ -788,7 +818,7 @@ float mjLandmark::CalcSize() {
 				circPos.insert(circPos.end(), intersections.begin(), intersections.end());
 			}
 		}
-		printf("CircPos : %d\n", circPos.size());
+		// printf("CircPos : %d\n", circPos.size());
 
 		if (circPos.empty()) {
 			printf("\nNo intersections!\n");
@@ -797,16 +827,9 @@ float mjLandmark::CalcSize() {
 
 		m_RelatedPos = SortWithAngle(0, circPos);
 		m_Value = circ(m_RelatedPos);
-		printf("New size : %f\n", m_Value);
+		// printf("New size : %f\n", m_Value);
 	}
 	else if (m_Type == Length) {
-		// ToDo::손끝은 lowerJoint가 없어서 포함안될듯 ?
-		// segment의 upper joint ~ lower joint 거리
-		for (int boneIdx : m_SegmentIdx) {
-			mjBone *thisBone = (*m_Human->m_Skeleton->m_Bones)[boneIdx];
-			distance += dist(*thisBone->m_UpperJoint->m_Coord, *thisBone->m_LowerJoint->m_Coord);
-		}
-		m_Value = distance;
 	}
 
 
@@ -819,47 +842,16 @@ void mjLandmark::Deform(float nval, float upperBound, float lowerBound) {
 		DeformLengthType(nval);
 		break;
 	case Girth:
-		DeformGirthType(nval, upperBound, lowerBound);
-		break;
 	default:
 		DeformGirthType(nval, upperBound, lowerBound);
 		break;
 	}
 
-	m_Value = CalcSize();
+	// m_Value = CalcSize();
+	CalcSize();
 }
 
 void mjLandmark::DeformLengthType(float nval) {	
-	std::cout << "Length type deformation... " << std::endl;
-	float scale = nval / m_Value;
-	std::cout << "Curr value : " << m_Value << ", Modifying to " << nval << std::endl;
-	std::cout << "scale is " << scale << std::endl;
-
-	for (int boneIdx : m_SegmentIdx) {
-		mjBone *thisBone = (*m_Human->m_Skeleton->m_Bones)[boneIdx];
-		
-		mjJoint *upperJoint = thisBone->m_UpperJoint;
-		mjJoint *lowerJoint = thisBone->m_LowerJoint;
-
-		std::cout << upperJoint->m_Idx << " " << lowerJoint->m_Idx << std::endl;
-
-		mjVec3 deformVec; 
-		deformVec.m_Pos->x = scale * (lowerJoint->m_Coord->x - upperJoint->m_Coord->x);
-		deformVec.m_Pos->y = scale * (lowerJoint->m_Coord->y - upperJoint->m_Coord->y);
-		
-		for (mjVertex* v : *thisBone->m_VertList) {
-			// upperJoint를 원점으로 이동
-
-			// Scale
-			v->m_Coord->x *= deformVec.m_Pos->x;
-			v->m_Coord->y *= deformVec.m_Pos->y;
-		}
-		/*
-		lowerJoint->m_Coord->x = deformVec.m_Pos->x;
-		lowerJoint->m_Coord->y = deformVec.m_Pos->y;
-		*/
-	}
-
 }
 
 void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound) {
@@ -870,7 +862,7 @@ void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound)
 	// m_Level을 원점으로 Quadratic하게 변형시킨다 -> 갖고 있는 Human의 vertices를 불러와서 변형
 	for (mjVertex *vert : *m_Human->m_Vertices) {
 		// vert가 변형 segment에 포함될 경우에만 deform
-		if (HasSegment(vert->m_Segment)) {
+		if (HasSegment(vert->m_BodySegment)) {
 			mjPos3 pos = *vert->m_Coord;
 			if (pos.y < upperBound && pos.y >= m_Level) {
 				float n = upperBound - pos.y;
@@ -883,7 +875,7 @@ void mjLandmark::DeformGirthType(float nval, float upperBound, float lowerBound)
 				vert->m_Coord->x = result.x;
 				vert->m_Coord->z = result.z;
 			}
-			else if (pos.y < m_Level && pos.y >= lowerBound) {
+			else if (pos.y < m_Level && pos.y > lowerBound) {
 				float n = m_Level - pos.y;
 				float m = pos.y - lowerBound;
 
@@ -1519,6 +1511,7 @@ bool HumanObject::LoadObjMtl(const char* fname) {
 			{
 				// 새로운 텍스처를 생성하여 메쉬에 추가하고, 재질에 설정한다.
 				mjTexture *pTexture = create_texture(0, texFP);
+
 				if (pTexture != NULL)
 				{
 					// pTexture->LoadTexture();
@@ -1939,8 +1932,12 @@ bool HumanObject::LoadHuman(const char* fname) {
 		return false;
 
 	// Assign weights to bones
-	if (!AssignWeight())
-		return false;
+	/*
+	if (!AssignWeight()) {
+
+		return false; 
+	}
+	*/
 
 
 	m_BoundingBox->SetBounds(minX, maxX, minY, maxY, minZ, maxZ);
@@ -1955,6 +1952,240 @@ bool HumanObject::LoadHuman(const char* fname) {
 	UpdateVertBuff();
 	UpdateIndexBuff();
 
+	return true;
+}
+
+
+bool HumanObject::LoadBodySegment(const char* fname) {
+	if (m_Vertices->empty()) {
+		printf("Vertices do not exsit. Exiting...\n");
+		return false;
+	}
+
+	// 기존 Body Segment는 삭제한다
+	if (!m_BodySegment->empty()) {
+		for (int i = 0; i < BodySegment_Num; i++) {
+			m_BodySegment[i].clear();
+		}
+	}
+
+	std::ifstream fp(fname);
+	if (!fp) {
+		printf("Loading %s failed...\n", fname);
+		return false;
+	}
+	else {
+		printf("Importing %s...\n", fname);
+	}
+
+	std::string line;
+	std::string delimiter = " ";
+	std::size_t pos = 0;
+	std::string segmentName;
+	int segmentIndex = -1;
+
+	while (getline(fp, line)) {
+		if (line[0] == '#') {
+			// "# "까지 line으로부터 제거
+			pos = line.find(delimiter);
+			line.erase(0, pos + delimiter.length());
+
+			// "%s %d"으로 구성된 line 처리
+			std::istringstream iss(line);
+			int num = 0;
+
+			iss >> segmentName >> num;
+
+			if (segmentName == "Segments") {
+				continue;
+			}
+
+			segmentIndex = getBodySegmentIndex(segmentName);
+			if (segmentIndex != -1) {
+				m_BodySegment[segmentIndex].assign(num, NULL);
+			}
+			else {
+				printf("Segment name %s does not exit. Failed importing %s...\n", segmentName, fname);
+				return false;
+			}
+		}
+		else {
+			std::string token;
+
+			// Delimiter까지의 위치(pos)를 찾는다 (open end)
+			int index = 0;
+			while ((pos = line.find(delimiter)) != std::string::npos) {
+				// line에서 delimiter 직전 위치(pos)까지 자른다
+				token = line.substr(0, pos);
+
+				m_BodySegment[segmentIndex][index] = GetVert(std::stoi(token));
+				index++;
+
+				// 시작점부터 delimiter까지 line에서 삭제
+				line.erase(0, pos + delimiter.length());
+			}
+		}
+	}
+
+
+	return true;
+}
+
+bool HumanObject::LoadABCRegion(const char* fname) {
+	std::ifstream fp(fname);
+	if (!fp) {
+		printf("Loading %s failed...\n", fname);
+		return false;
+	}
+	else {
+		printf("Importing %s...\n", fname);
+	}
+
+	std::string line;
+	std::string delimiter = " ";
+	std::size_t pos = 0;
+	std::string region;
+	int regionIdx = 0;
+
+	while (getline(fp, line)) {
+		if (line[0] == '#') {
+			// "# "까지 line으로부터 제거
+			pos = line.find(delimiter);
+			line.erase(0, pos + delimiter.length());
+
+			// "%s %d"으로 구성된 line 처리
+			std::istringstream iss(line);
+			int num = 0;
+
+			iss >> region >> num;
+
+			if (region == "Region") {
+				continue;
+			}
+
+			m_Region[regionIdx].assign(num, NULL);
+		}
+		else {
+			std::string token;
+
+			// Delimiter까지의 위치(pos)를 찾는다 (open end)
+			int index = 0;
+			while ((pos = line.find(delimiter)) != std::string::npos) {
+				// line에서 delimiter 직전 위치(pos)까지 자른다
+				token = line.substr(0, pos);
+
+				m_Region[regionIdx][index] = GetVert(std::stoi(token));
+				index++;
+
+				// 시작점부터 delimiter까지 line에서 삭제
+				line.erase(0, pos + delimiter.length());
+			}
+
+			regionIdx++;
+		}
+	}
+
+	if (!SegmentABC()) {
+		printf("ABC Segmentation failed...\n");
+	}
+
+	UpdateVertBuff();
+
+	return true;
+}
+
+bool HumanObject::SegmentABC() {
+	// Initialize
+	for (int i = 0; i < BodySegment_Num; i++) {
+		if (!m_BodySegment[i].empty())
+			m_BodySegment[i].clear();
+	}
+
+	// Arm Left
+	for (mjVertex *v : m_Region[0]) {
+		mjBone *upper = (*m_Skeleton->m_Bones)[Bone_upperArm1L];
+		mjBone *lower = (*m_Skeleton->m_Bones)[Bone_lowerArmL];
+
+		float toUp = distToLineSegment(*v->m_Coord, *upper->m_UpperJoint->m_Coord, *upper->m_LowerJoint->m_Coord);
+		float toLow = distToLineSegment(*v->m_Coord, *lower->m_UpperJoint->m_Coord, *lower->m_LowerJoint->m_Coord);
+
+		if (toUp < toLow) {
+			m_BodySegment[BodySegment_armUpperL].push_back(v);
+			v->m_BodySegment = BodySegment_armUpperL;
+		}
+		else {
+			m_BodySegment[BodySegment_armLowerL].push_back(v);
+			v->m_BodySegment = BodySegment_armLowerL;
+		}
+	}
+
+	// Mid Body
+	for (mjVertex *v : m_Region[1]) {
+		float x = v->m_Coord->x;
+		float y = v->m_Coord->y;
+		float z = v->m_Coord->z;
+
+		std::vector<mjBone *> *bones = m_Skeleton->m_Bones;
+
+		if (y > (*bones)[Bone_head]->m_UpperJoint->m_Coord->y) {
+			m_BodySegment[BodySegment_head].push_back(v);
+			v->m_BodySegment = BodySegment_head;
+		}
+		else if (y > (*bones)[Bone_neck]->m_UpperJoint->m_Coord->y) {
+			m_BodySegment[BodySegment_neck].push_back(v);
+			v->m_BodySegment = BodySegment_neck;
+		}
+		else if (y > (*bones)[Bone_waist]->m_UpperJoint->m_Coord->y) {
+			m_BodySegment[BodySegment_torsoUpper].push_back(v);
+			v->m_BodySegment = BodySegment_torsoUpper;
+		}
+		else if (y > (*bones)[Bone_upperLegR]->m_UpperJoint->m_Coord->y 
+			|| y > (*bones)[Bone_upperLegL]->m_UpperJoint->m_Coord->y) {
+			m_BodySegment[BodySegment_torsoLower].push_back(v);
+			v->m_BodySegment = BodySegment_torsoLower;
+		}
+		else {
+			if (x < (*bones)[Bone_pelvis]->m_LowerJoint->m_Coord->x) {
+				if (y > (*bones)[Bone_lowerLegR]->m_UpperJoint->m_Coord->y) {
+					m_BodySegment[BodySegment_legUpperR].push_back(v);
+					v->m_BodySegment = BodySegment_legUpperR;
+				}
+				else {
+					m_BodySegment[BodySegment_legLowerR].push_back(v);
+					v->m_BodySegment = BodySegment_legLowerR;
+				}
+			}
+			else {
+				if (y > (*bones)[Bone_lowerLegL]->m_UpperJoint->m_Coord->y) {
+					m_BodySegment[BodySegment_legUpperL].push_back(v);
+					v->m_BodySegment = BodySegment_legUpperL;
+				}
+				else {
+					m_BodySegment[BodySegment_legLowerL].push_back(v);
+					v->m_BodySegment = BodySegment_legLowerL;
+				}
+			}
+		}
+	}
+
+	// Arm Right
+	for (mjVertex *v : m_Region[2]) {
+		mjBone *upper = (*m_Skeleton->m_Bones)[Bone_upperArm1R];
+		mjBone *lower = (*m_Skeleton->m_Bones)[Bone_lowerArmR];
+
+		float toUp = distToLineSegment(*v->m_Coord, *upper->m_UpperJoint->m_Coord, *upper->m_LowerJoint->m_Coord);
+		float toLow = distToLineSegment(*v->m_Coord, *lower->m_UpperJoint->m_Coord, *lower->m_LowerJoint->m_Coord);
+
+		if (toUp < toLow) {
+			m_BodySegment[BodySegment_armUpperR].push_back(v);
+			v->m_BodySegment = BodySegment_armUpperR;
+		}
+		else {
+			m_BodySegment[BodySegment_armLowerR].push_back(v);
+			v->m_BodySegment = BodySegment_armLowerR;
+		}
+	}
+	
 	return true;
 }
 
@@ -2007,6 +2238,8 @@ bool HumanObject::SetSkeleton() {
 
 	m_Skeleton->AddBone(Bone_handR, create_Bone((*m_Skeleton->m_Joints)[Joint_wristR], (*m_Skeleton->m_Joints)[Joint_handR]));
 	m_Skeleton->AddBone(Bone_handL, create_Bone((*m_Skeleton->m_Joints)[Joint_wristL], (*m_Skeleton->m_Joints)[Joint_handL]));
+
+	m_Skeleton->AddBone(Bone_head, create_Bone((*m_Skeleton->m_Joints)[Joint_head], (*m_Skeleton->m_Joints)[Joint_neck]));
 
 
 	// Set Bone Parent and Child
@@ -2072,12 +2305,13 @@ bool HumanObject::SetSkeleton() {
 	(*m_Skeleton->m_Bones)[Bone_lowerArm2R]->SetChild((*m_Skeleton->m_Bones)[Bone_handR]);
 	(*m_Skeleton->m_Bones)[Bone_lowerArm2L]->SetChild((*m_Skeleton->m_Bones)[Bone_handL]);
 
+	(*m_Skeleton->m_Bones)[Bone_head]->SetChild((*m_Skeleton->m_Bones)[Bone_neck]);
+
 	// Set leaf
 	(*m_Skeleton->m_Bones)[Bone_handR]->isLeaf = true;
 	(*m_Skeleton->m_Bones)[Bone_handL]->isLeaf = true;
 
 	std::cout << "Successful!" << std::endl;
-
 
 
 	/************************************** HELPER JOINTS AND BONES GENERATION *****************************************/
@@ -2117,50 +2351,7 @@ bool HumanObject::SetSegment() {
 	std::vector<mjBone *> totalBones;
 
 	totalBones.insert(totalBones.end(), m_Skeleton->m_HelperBones->begin(), m_Skeleton->m_HelperBones->end());
-	// totalBones.insert(totalBones.end(), m_Skeleton->m_Bones->begin(), m_Skeleton->m_Bones->end());
-	// 수동 순서 지정
-	/*
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_pelvis]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_waist]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine1]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine2]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_spine3]);
-	*/
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_neck]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_ribR]);
-	/*
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_ribL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_pelvisR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_pelvisL]);
-	*/
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_hipR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_hipL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLegR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLeg1R]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerLegR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLegL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperLeg1L]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerLegL]);
-
-
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_collarboneR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_shoulderR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArmR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArm1R]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArmR]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm1R]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm2R]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_handR]);
-
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_collarboneL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_shoulderL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArmL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_upperArm1L]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArmL]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm1L]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_lowerArm2L]);
-	totalBones.push_back((*m_Skeleton->m_Bones)[Bone_handL]);
+	totalBones.insert(totalBones.end(), m_Skeleton->m_Bones->begin(), m_Skeleton->m_Bones->end());
 
 	// 팔 그룹 처리
 	std::vector<int> armR, armL;
@@ -2172,16 +2363,6 @@ bool HumanObject::SetSegment() {
 	armR.push_back(Bone_lowerArm2R);
 	armR.push_back(Bone_handR);
 
-	// mjPos3 boundR = ((*(*m_Skeleton->m_Joints)[Joint_handR]->m_Coord) + 2 * (*(*m_Skeleton->m_Joints)[Joint_ribR]->m_Coord)) / 3;
-	mjPos3 armpitR = *(*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord;
-	armpitR.y -= 20.0;
-	mjPos3 boundR = *(*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord;
-	boundR.x -= 10.0;
-	boundR.y = (*m_Skeleton->m_Joints)[Joint_handR]->m_Coord->y;
-	mjPos3 tmpR = boundR;
-	tmpR.z += 10;
-	mjPlane rightPlane(armpitR, boundR, tmpR);
-
 	armL.push_back(Bone_shoulderL);
 	armL.push_back(Bone_upperArmL);
 	armL.push_back(Bone_upperArm1L);
@@ -2190,20 +2371,33 @@ bool HumanObject::SetSegment() {
 	armL.push_back(Bone_lowerArm2L);
 	armL.push_back(Bone_handL);
 
-	// mjPos3 boundL = ((*(*m_Skeleton->m_Joints)[Joint_handL]->m_Coord) + 2 * (*(*m_Skeleton->m_Joints)[Joint_ribL]->m_Coord)) / 3;
-	mjPos3 armpitL = *(*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord;
-	armpitL.y -= 20.0;
-	mjPos3 boundL = *(*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord;
-	boundL.x += 10.0;
-	boundL.y = (*m_Skeleton->m_Joints)[Joint_handL]->m_Coord->y;
-	mjPos3 tmpL = boundL;
-	tmpL.z += 10;
-	mjPlane leftPlane(armpitL, tmpL, boundL);
+	std::vector<mjBone *> torso;
+	torso.insert(torso.end(), m_Skeleton->m_HelperBones->begin(), m_Skeleton->m_HelperBones->end());
 
+	float adjustY = (m_MinY + m_MaxY) / 2;
+	float depth = (*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord->z;
+	mjPos3 armpit_R(-16.3, 40.9 + adjustY, depth);
+	mjPos3 lower_R((*m_Skeleton->m_Joints)[Joint_handR]->m_Coord->x + 10.0f, (*m_Skeleton->m_Joints)[Joint_handR]->m_Coord->y, depth);
+	mjPos3 tmp_R = lower_R;
+	tmp_R.z += 10.0f;
 
-	// 각 Bone에 가까운 점들로 Segment를 구성한다
+	depth = (*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord->z;
+	mjPos3 armpit_L(10.3, 41.2 + adjustY, depth);
+	mjPos3 lower_L((*m_Skeleton->m_Joints)[Joint_handL]->m_Coord->x - 10.0f, (*m_Skeleton->m_Joints)[Joint_handL]->m_Coord->y, depth);
+	mjPos3 tmp_L = lower_L;
+	tmp_L.z -= 10.0f;
+
+	mjPlane pln_R(armpit_R, lower_R, tmp_R);
+
+	mjPlane pln_L(armpit_L, lower_L, tmp_L);
+
+	// 가까운 점들로 Segment를 구성한다
 	for (mjVertex *v : *m_Vertices) {
 		int closestBoneIdx = -1;
+
+		get_closestSegment(v, &totalBones, closestBoneIdx);
+
+		/*
 		float minDistance = INFINITY;
 
 		for (mjBone *b : totalBones) {
@@ -2213,24 +2407,28 @@ bool HumanObject::SetSegment() {
 			float distance = distToLineSegment(*v->m_Coord, upperJoint, lowerJoint);
 
 			if (distance < minDistance) {
-				if (find(b->m_Idx, armR)) {
-					if (rightPlane.IsBelow(*v->m_Coord)) {
-						continue;
-					}
-				}
-				else if (find(b->m_Idx, armL)) {
-					if (leftPlane.IsBelow(*v->m_Coord)) {
-						continue;
-					}
-				}
 				closestBoneIdx = b->m_Idx;
 				minDistance = distance;
 			}
 		}
+		*/
 
-		if (closestBoneIdx != -1 && v->m_Segment == -1) {
-			m_Segment[closestBoneIdx].push_back(v);
-			v->m_Segment = closestBoneIdx;
+		if (closestBoneIdx != -1 && v->m_BoneSegment == -1) {
+			// (특정 모델에 대해) 팔 그룹으로 처리된 몸통에 대한 임시 처리 (21. 1. 3)
+			// if ((v->m_Coord->x > -16.3 && find(closestBoneIdx, armR)) || (v->m_Coord->x < 10.3 && find(closestBoneIdx, armL))) {
+			if (
+				(v->m_Coord->x >= armpit_R.x || pln_R.IsBelow(*v->m_Coord)) && find(closestBoneIdx, armR)
+				) {
+				get_closestSegment(v, &torso, closestBoneIdx);;
+			}
+			else if (
+				(v->m_Coord->x <= armpit_L.x || pln_L.IsBelow(*v->m_Coord)) && find(closestBoneIdx, armL)
+				) {
+				get_closestSegment(v, &torso, closestBoneIdx);; }
+			/////////////////////////////////////////////////////////////////////
+
+			m_BoneSegment[closestBoneIdx].push_back(v);
+			v->m_BoneSegment = closestBoneIdx;
 		}
 		else {
 			std::cout << "No closest bone found for vertex " << v->m_Idx << " !!\n" << std::endl;
@@ -2238,6 +2436,70 @@ bool HumanObject::SetSegment() {
 		}
 	}
 
+	// Body Segment 구성
+	// ToDo :: 아직 머리 관련 bone segment가 없기 때문에 Head와 Neck은 임시로 Bone_neck으로 동일하게 할당한다 (21. 1. 4)
+	m_BodySegment[BodySegment_head].insert(m_BodySegment[BodySegment_head].end(), m_BoneSegment[Bone_head].begin(), m_BoneSegment[Bone_head].end());
+
+	m_BodySegment[BodySegment_neck].insert(m_BodySegment[BodySegment_neck].end(), m_BoneSegment[Bone_neck].begin(), m_BoneSegment[Bone_neck].end());
+
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_ribR].begin(), m_BoneSegment[Bone_ribR].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_ribL].begin(), m_BoneSegment[Bone_ribL].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_collarboneR].begin(), m_BoneSegment[Bone_collarboneR].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_collarboneL].begin(), m_BoneSegment[Bone_collarboneL].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_shoulderR].begin(), m_BoneSegment[Bone_shoulderR].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_shoulderL].begin(), m_BoneSegment[Bone_shoulderL].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_spine3].begin(), m_BoneSegment[Bone_spine3].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_spine2].begin(), m_BoneSegment[Bone_spine2].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_spine1].begin(), m_BoneSegment[Bone_spine1].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_spine].begin(), m_BoneSegment[Bone_spine].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_Num + HelperBone_spine2R].begin(), m_BoneSegment[Bone_Num + HelperBone_spine2R].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_Num + HelperBone_spine2L].begin(), m_BoneSegment[Bone_Num + HelperBone_spine2L].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_Num + HelperBone_spine1R].begin(), m_BoneSegment[Bone_Num + HelperBone_spine1R].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_Num + HelperBone_spine1L].begin(), m_BoneSegment[Bone_Num + HelperBone_spine1L].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_Num + HelperBone_spineR].begin(), m_BoneSegment[Bone_Num + HelperBone_spineR].end());
+	m_BodySegment[BodySegment_torsoUpper].insert(m_BodySegment[BodySegment_torsoUpper].end(), m_BoneSegment[Bone_Num + HelperBone_spineL].begin(), m_BoneSegment[Bone_Num + HelperBone_spineL].end());
+
+	m_BodySegment[BodySegment_torsoLower].insert(m_BodySegment[BodySegment_torsoLower].end(), m_BoneSegment[Bone_waist].begin(), m_BoneSegment[Bone_waist].end());
+	m_BodySegment[BodySegment_torsoLower].insert(m_BodySegment[BodySegment_torsoLower].end(), m_BoneSegment[Bone_Num + HelperBone_waistR].begin(), m_BoneSegment[Bone_Num + HelperBone_waistR].end());
+	m_BodySegment[BodySegment_torsoLower].insert(m_BodySegment[BodySegment_torsoLower].end(), m_BoneSegment[Bone_Num + HelperBone_waistL].begin(), m_BoneSegment[Bone_Num + HelperBone_waistL].end());
+	m_BodySegment[BodySegment_torsoLower].insert(m_BodySegment[BodySegment_torsoLower].end(), m_BoneSegment[Bone_pelvis].begin(), m_BoneSegment[Bone_pelvis].end());
+	m_BodySegment[BodySegment_torsoLower].insert(m_BodySegment[BodySegment_torsoLower].end(), m_BoneSegment[Bone_pelvisR].begin(), m_BoneSegment[Bone_pelvisR].end());
+	m_BodySegment[BodySegment_torsoLower].insert(m_BodySegment[BodySegment_torsoLower].end(), m_BoneSegment[Bone_pelvisL].begin(), m_BoneSegment[Bone_pelvisL].end());
+
+	m_BodySegment[BodySegment_legUpperR].insert(m_BodySegment[BodySegment_legUpperR].end(), m_BoneSegment[Bone_hipR].begin(), m_BoneSegment[Bone_hipR].end());
+	m_BodySegment[BodySegment_legUpperR].insert(m_BodySegment[BodySegment_legUpperR].end(), m_BoneSegment[Bone_upperLegR].begin(), m_BoneSegment[Bone_upperLegR].end());
+	m_BodySegment[BodySegment_legUpperR].insert(m_BodySegment[BodySegment_legUpperR].end(), m_BoneSegment[Bone_upperLeg1R].begin(), m_BoneSegment[Bone_upperLeg1R].end());
+
+	m_BodySegment[BodySegment_legLowerR].insert(m_BodySegment[BodySegment_legLowerR].end(), m_BoneSegment[Bone_lowerLegR].begin(), m_BoneSegment[Bone_lowerLegR].end());
+
+	m_BodySegment[BodySegment_legUpperL].insert(m_BodySegment[BodySegment_legUpperL].end(), m_BoneSegment[Bone_hipL].begin(), m_BoneSegment[Bone_hipL].end());
+	m_BodySegment[BodySegment_legUpperL].insert(m_BodySegment[BodySegment_legUpperL].end(), m_BoneSegment[Bone_upperLegL].begin(), m_BoneSegment[Bone_upperLegL].end());
+	m_BodySegment[BodySegment_legUpperL].insert(m_BodySegment[BodySegment_legUpperL].end(), m_BoneSegment[Bone_upperLeg1L].begin(), m_BoneSegment[Bone_upperLeg1L].end());
+
+	m_BodySegment[BodySegment_legLowerL].insert(m_BodySegment[BodySegment_legLowerL].end(), m_BoneSegment[Bone_lowerLegL].begin(), m_BoneSegment[Bone_lowerLegL].end());
+
+	m_BodySegment[BodySegment_armUpperR].insert(m_BodySegment[BodySegment_armUpperR].end(), m_BoneSegment[Bone_upperArmR].begin(), m_BoneSegment[Bone_upperArmR].end());
+	m_BodySegment[BodySegment_armUpperR].insert(m_BodySegment[BodySegment_armUpperR].end(), m_BoneSegment[Bone_upperArm1R].begin(), m_BoneSegment[Bone_upperArm1R].end());
+	m_BodySegment[BodySegment_armUpperR].insert(m_BodySegment[BodySegment_armUpperR].end(), m_BoneSegment[Bone_lowerArmR].begin(), m_BoneSegment[Bone_lowerArmR].end());
+
+	m_BodySegment[BodySegment_armLowerR].insert(m_BodySegment[BodySegment_armLowerR].end(), m_BoneSegment[Bone_lowerArm1R].begin(), m_BoneSegment[Bone_lowerArm1R].end());
+	m_BodySegment[BodySegment_armLowerR].insert(m_BodySegment[BodySegment_armLowerR].end(), m_BoneSegment[Bone_lowerArm2R].begin(), m_BoneSegment[Bone_lowerArm2R].end());
+	m_BodySegment[BodySegment_armLowerR].insert(m_BodySegment[BodySegment_armLowerR].end(), m_BoneSegment[Bone_handR].begin(), m_BoneSegment[Bone_handR].end());
+
+	m_BodySegment[BodySegment_armUpperL].insert(m_BodySegment[BodySegment_armUpperL].end(), m_BoneSegment[Bone_upperArmL].begin(), m_BoneSegment[Bone_upperArmL].end());
+	m_BodySegment[BodySegment_armUpperL].insert(m_BodySegment[BodySegment_armUpperL].end(), m_BoneSegment[Bone_upperArm1L].begin(), m_BoneSegment[Bone_upperArm1L].end());
+	m_BodySegment[BodySegment_armUpperL].insert(m_BodySegment[BodySegment_armUpperL].end(), m_BoneSegment[Bone_lowerArmL].begin(), m_BoneSegment[Bone_lowerArmL].end());
+
+	m_BodySegment[BodySegment_armLowerL].insert(m_BodySegment[BodySegment_armLowerL].end(), m_BoneSegment[Bone_lowerArm1L].begin(), m_BoneSegment[Bone_lowerArm1L].end());
+	m_BodySegment[BodySegment_armLowerL].insert(m_BodySegment[BodySegment_armLowerL].end(), m_BoneSegment[Bone_lowerArm2L].begin(), m_BoneSegment[Bone_lowerArm2L].end());
+	m_BodySegment[BodySegment_armLowerL].insert(m_BodySegment[BodySegment_armLowerL].end(), m_BoneSegment[Bone_handL].begin(), m_BoneSegment[Bone_handL].end());
+
+
+	for (int i = 0; i < BodySegment_Num; i++) {
+		for (mjVertex *v : m_BodySegment[i]) {
+			v->m_BodySegment = i;
+		}
+	}
 
 	UpdateVertBuff();
 
@@ -2457,6 +2719,37 @@ void HumanObject::WriteHuman(const char* fname) {
 	oFile.close();
 }
 
+void HumanObject::ExportBoneSegment(const char* fname) {
+	std::ofstream oFile(fname);
+	oFile << "# " << "Segments " << Total_Bone_Num << std::endl;
+
+	for (int i = 0; i < Total_Bone_Num; i++) {
+		oFile << "# " << BoneSegmentNames[i] << " " << m_BoneSegment[i].size() << std::endl;
+		for (mjVertex *v : m_BoneSegment[i]) {
+			oFile << v->m_Idx << " ";
+		}
+		oFile << std::endl;
+	}
+
+	oFile.close();
+}
+
+// Sizing에 사용되는 segment
+void HumanObject::ExportBodySegment(const char* fname) {
+	std::ofstream oFile(fname);
+	oFile << "# " << "Segments " << BodySegment_Num << std::endl;
+
+	for (int i = 0; i < BodySegment_Num; i++) {
+		oFile << "# " << BodySegmentNames[i] << " " << m_BodySegment[i].size() << std::endl;
+		for (mjVertex *v : m_BodySegment[i]) {
+			oFile << v->m_Idx << " ";
+		}
+		oFile << std::endl;
+	}
+
+	oFile.close();
+}
+
 
 void HumanObject::SetMale(){
 	m_Gender = Male;
@@ -2541,8 +2834,9 @@ void HumanObject::UpdateVertBuff() {
 	m_VertBuf.clear();
 
 	// Generate rand colors for segments
-	float r[Total_Bone_Num], g[Total_Bone_Num], b[Total_Bone_Num];
-	for (int i = 0; i < Total_Bone_Num; i++) {
+	float r[BodySegment_Num], g[BodySegment_Num], b[BodySegment_Num];
+
+	for (int i = 0; i < BodySegment_Num; i++) {
 		r[i] = rand() / double(RAND_MAX);
 		g[i] = rand() / double(RAND_MAX);
 		b[i] = rand() / double(RAND_MAX);
@@ -2552,36 +2846,25 @@ void HumanObject::UpdateVertBuff() {
 		g[i] = 0;
 		b[i] = 0;
 
-		if (i == Bone_spine) {
+		if (i == BodySegment_armUpperR || i == BodySegment_armUpperL || i == BodySegment_legUpperR || i == BodySegment_legUpperL) {
 			r[i] = 1;
 			g[i] = 0;
 			b[i] = 0;
 		}
-		else if (i == Bone_waist) {
-			r[i] = 0;
-			g[i] = 1;
-			b[i] = 0;
-		}
-		else if (i == Bone_ribR) {
-			r[i] = 0;
-			g[i] = 0;
-			b[i] = 1;
-		}
-		else if (i == Bone_ribL) {
+		else if (i == BodySegment_armLowerR || i == BodySegment_armLowerL || i == BodySegment_legLowerR || i == BodySegment_legLowerL) {
 			r[i] = 1;
 			g[i] = 1;
 			b[i] = 0;
 		}
-		else if (i == Bone_upperArmR) {
+		else if (i == BodySegment_torsoUpper) {
+			r[i] = 0;
+			g[i] = 1;
+			b[i] = 0;
+		}
+		else if (i == BodySegment_torsoLower) {
 			r[i] = 0;
 			g[i] = 0;
 			b[i] = 1;
-		}
-		else if (i == Bone_pelvis) {
-			r[i] = 1;
-			g[i] = 1;
-			b[i] = 0;
-
 		}
 		*/
 	}
@@ -2609,9 +2892,9 @@ void HumanObject::UpdateVertBuff() {
 
 			// Color
 			// Bone Segment 별로 다른 색상 부여
-			m_VertBuf[mtlName].push_back(r[v->m_Segment]);
-			m_VertBuf[mtlName].push_back(g[v->m_Segment]);
-			m_VertBuf[mtlName].push_back(b[v->m_Segment]);
+			m_VertBuf[mtlName].push_back(r[v->m_BodySegment]);
+			m_VertBuf[mtlName].push_back(g[v->m_BodySegment]);
+			m_VertBuf[mtlName].push_back(b[v->m_BodySegment]);
 		}
 	}
 
@@ -2634,9 +2917,9 @@ void HumanObject::UpdateVertBuff() {
 
 		// Color
 		// Bone Segment 별로 다른 색상 부여
-		m_VertBuf.push_back(r[v->m_Segment]);
-		m_VertBuf.push_back(g[v->m_Segment]);
-		m_VertBuf.push_back(b[v->m_Segment]);
+		m_VertBuf.push_back(r[v->m_BoneSegment]);
+		m_VertBuf.push_back(g[v->m_BoneSegment]);
+		m_VertBuf.push_back(b[v->m_BoneSegment]);
 	}
 	*/
 }
@@ -2687,7 +2970,7 @@ int HumanObject::GetLandmarkNum() {
 // [in] i : 
 // [out] buffer : buffer에 이름 저장
 void HumanObject::GetLandmarkName(int i, char* buffer) {
-	buffer = (char*) (*m_Landmarks)[i]->m_Name.c_str();
+	strcpy(buffer, (*m_Landmarks)[i]->m_Name.c_str());
 }
 
 
@@ -2710,7 +2993,12 @@ float HumanObject::GetLandmarkValue(char* lname) {
 
 
 // sizes 순서대로 치수 변형
+// Bust - Waist - Hip 순 (2021. 01. 29)
 void HumanObject::SetSizes(float *sizes) {
+
+	SetSize(Bust, sizes[0]);
+	SetSize(Waist, sizes[1]);
+	SetSize(Hip, sizes[2]);
 }
 
 // i번째 측정항목 치수 변형
@@ -2729,42 +3017,39 @@ void HumanObject::SetSize(int i, float value) {
 		// 해당 랜드마크 바로 위, 아래 level을 갖는 level를 각각 upperBound, lowerBound로 정의한다
 		float upperBound = m_BoundingBox->m_MaxY,
 			lowerBound = m_BoundingBox->m_MinY;
+		/*
 		for (mjLandmark *l : *m_Landmarks) {
 			if (l->m_Type == Girth) {
 				// Set upperBound
-				if (l->m_Level < upperBound && l->m_Level > thisLandmark->m_Level) {
+				if (l->m_Level <= upperBound && l->m_Level > thisLandmark->m_Level) {
 					upperBound = l->m_Level;
 				}
 				
 				// Set lowerBound
-				if (l->m_Level < thisLandmark->m_Level && l->m_Level > lowerBound) {
+				if (l->m_Level < thisLandmark->m_Level && l->m_Level >= lowerBound) {
 					lowerBound = l->m_Level;
 				}
 			}
 		}
+		*/
+		
+		// 키의 15% 정도의 위아래로만 변형
+		float range = ABS(m_BoundingBox->m_MaxY - m_BoundingBox->m_MinY) * 0.15;
+		upperBound = thisLandmark->m_Level + range;
+		lowerBound = thisLandmark->m_Level - range;
 		
 		if (i == Bust && thisLandmark->GetSegments().empty()) {
-			thisLandmark->SetSegment(Bone_neck);
-			thisLandmark->SetSegment(Bone_spine3);
-			thisLandmark->SetSegment(Bone_spine2);
-			thisLandmark->SetSegment(Bone_spine1);
-			thisLandmark->SetSegment(Bone_spine);
-			thisLandmark->SetSegment(Bone_waist);
-			thisLandmark->SetSegment(Bone_pelvis);
-
-			thisLandmark->SetSegment(Bone_collarboneR);
-			thisLandmark->SetSegment(Bone_collarboneL);
-			thisLandmark->SetSegment(Bone_shoulderR);
-			thisLandmark->SetSegment(Bone_shoulderL);
-
-			thisLandmark->SetSegment(Bone_ribR);
-			thisLandmark->SetSegment(Bone_ribL);
+			// thisLandmark->SetBodySegment(BodySegment_head);
+			thisLandmark->SetSegment(BodySegment_neck);
+			thisLandmark->SetSegment(BodySegment_torsoUpper);
 
 			// ToDo::Bust sizing의 경우 joint position이 업데이트되어야한다
+			// 관절 이동량 계산
 			float deformationScale = value / thisLandmark->m_Value;
 			float jointMovement_R = abs((*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord->x * (deformationScale - 1));
 			float jointMovement_L = abs((*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord->x * (deformationScale - 1));
 
+			// 오른쪽 관절 이동
 			(*m_Skeleton->m_Joints)[Joint_shoulderR]->m_Coord->x -= jointMovement_R;
 			(*m_Skeleton->m_Joints)[Joint_shoulderTwistR]->m_Coord->x -= jointMovement_R;
 			(*m_Skeleton->m_Joints)[Joint_elbowR]->m_Coord->x -= jointMovement_R;
@@ -2773,26 +3058,14 @@ void HumanObject::SetSize(int i, float value) {
 			(*m_Skeleton->m_Joints)[Joint_wristR]->m_Coord->x -= jointMovement_R;
 			(*m_Skeleton->m_Joints)[Joint_handR]->m_Coord->x -= jointMovement_R;
 
-			for (mjVertex *v : m_Segment[Bone_upperArmR]) {
-				v->m_Coord->x -= jointMovement_R;
-			}
-			for (mjVertex *v : m_Segment[Bone_upperArm1R]) {
-				v->m_Coord->x -= jointMovement_R;
-			}
-			for (mjVertex *v : m_Segment[Bone_lowerArmR]) {
-				v->m_Coord->x -= jointMovement_R;
-			}
-			for (mjVertex *v : m_Segment[Bone_lowerArm1R]) {
-				v->m_Coord->x -= jointMovement_R;
-			}
-			for (mjVertex *v : m_Segment[Bone_lowerArm2R]) {
-				v->m_Coord->x -= jointMovement_R;
-			}
-			for (mjVertex *v : m_Segment[Bone_handR]) {
-				v->m_Coord->x -= jointMovement_R;
-			}
 
+			// 오른쪽 표면점 이동
+			for (mjVertex *v : m_BodySegment[BodySegment_armUpperR])
+				v->m_Coord->x -= jointMovement_R;
+			for (mjVertex *v : m_BodySegment[BodySegment_armLowerR]) 
+				v->m_Coord->x -= jointMovement_R;
 
+			// 왼쪽 관절 이동
 			(*m_Skeleton->m_Joints)[Joint_shoulderL]->m_Coord->x += jointMovement_L;
 			(*m_Skeleton->m_Joints)[Joint_shoulderTwistL]->m_Coord->x += jointMovement_L;
 			(*m_Skeleton->m_Joints)[Joint_elbowL]->m_Coord->x += jointMovement_L;
@@ -2801,85 +3074,23 @@ void HumanObject::SetSize(int i, float value) {
 			(*m_Skeleton->m_Joints)[Joint_wristL]->m_Coord->x += jointMovement_L;
 			(*m_Skeleton->m_Joints)[Joint_handL]->m_Coord->x += jointMovement_L;
 
-			for (mjVertex *v : m_Segment[Bone_upperArmL]) {
+			// 왼쪽 표면점 이동
+			for (mjVertex *v : m_BodySegment[BodySegment_armUpperL]) 
 				v->m_Coord->x += jointMovement_L;
-			}
-			for (mjVertex *v : m_Segment[Bone_upperArm1L]) {
+			for (mjVertex *v : m_BodySegment[BodySegment_armLowerL]) 
 				v->m_Coord->x += jointMovement_L;
-			}
-			for (mjVertex *v : m_Segment[Bone_lowerArmL]) {
-				v->m_Coord->x += jointMovement_L;
-			}
-			for (mjVertex *v : m_Segment[Bone_lowerArm1L]) {
-				v->m_Coord->x += jointMovement_L;
-			}
-			for (mjVertex *v : m_Segment[Bone_lowerArm2L]) {
-				v->m_Coord->x += jointMovement_L;
-			}
-			for (mjVertex *v : m_Segment[Bone_handL]) {
-				v->m_Coord->x += jointMovement_L;
-			}
 		}
 		if (i == Waist && thisLandmark->GetSegments().empty()) {
-			/*
-			thisLandmark->SetSegment(Bone_neck);
-			thisLandmark->SetSegment(Bone_spine3);
-			*/
-			thisLandmark->SetSegment(Bone_spine2);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_spine2R);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_spine2L);
-
-			thisLandmark->SetSegment(Bone_spine1);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_spine1R);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_spine1L);
-
-			thisLandmark->SetSegment(Bone_spine);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_spineR);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_spineL);
-			thisLandmark->SetSegment(Bone_waist);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_waistR);
-			thisLandmark->SetSegment(Bone_Num + HelperBone_waistL);
-			thisLandmark->SetSegment(Bone_pelvis);
-
-			// thisLandmark->SetSegment(Bone_ribR);
-			// thisLandmark->SetSegment(Bone_ribL);
-
-			thisLandmark->SetSegment(Bone_pelvisR);
-			thisLandmark->SetSegment(Bone_hipR);
-			thisLandmark->SetSegment(Bone_upperLegR);
-			thisLandmark->SetSegment(Bone_upperLeg1R);
-			thisLandmark->SetSegment(Bone_lowerLegR);
-
-			thisLandmark->SetSegment(Bone_pelvisL);
-			thisLandmark->SetSegment(Bone_hipL);
-			thisLandmark->SetSegment(Bone_upperLegL);
-			thisLandmark->SetSegment(Bone_upperLeg1L);
-			thisLandmark->SetSegment(Bone_lowerLegL);
-
-			/*
-			thisLandmark->SetSegment(Bone_collarboneR);
-			thisLandmark->SetSegment(Bone_collarboneL);
-			thisLandmark->SetSegment(Bone_shoulderR);
-			thisLandmark->SetSegment(Bone_shoulderL);
-			*/
+			thisLandmark->SetSegment(BodySegment_torsoUpper);
+			thisLandmark->SetSegment(BodySegment_torsoLower);
 
 		}
 		if (i == Hip && thisLandmark->GetSegments().empty()) {
-			thisLandmark->SetSegment(Bone_spine);
-			thisLandmark->SetSegment(Bone_waist);
-			thisLandmark->SetSegment(Bone_pelvis);
-
-			thisLandmark->SetSegment(Bone_pelvisR);
-			thisLandmark->SetSegment(Bone_hipR);
-			thisLandmark->SetSegment(Bone_upperLegR);
-			thisLandmark->SetSegment(Bone_upperLeg1R);
-			thisLandmark->SetSegment(Bone_lowerLegR);
-
-			thisLandmark->SetSegment(Bone_pelvisL);
-			thisLandmark->SetSegment(Bone_hipL);
-			thisLandmark->SetSegment(Bone_upperLegL);
-			thisLandmark->SetSegment(Bone_upperLeg1L);
-			thisLandmark->SetSegment(Bone_lowerLegL);
+			thisLandmark->SetSegment(BodySegment_torsoLower);
+			thisLandmark->SetSegment(BodySegment_legUpperR);
+			thisLandmark->SetSegment(BodySegment_legLowerR);
+			thisLandmark->SetSegment(BodySegment_legUpperL);
+			thisLandmark->SetSegment(BodySegment_legLowerL);
 		}
 
 		thisLandmark->Deform(value, upperBound, lowerBound);
@@ -2887,59 +3098,6 @@ void HumanObject::SetSize(int i, float value) {
 	// i번째 랜드마크가 Length일 경우,
 	else if (thisLandmark->m_Type == Length) {
 		std::cout << "Landmark Length type... " << std::endl;
-
-		// 각 segment를 구성하는 bone vector에 따라 scale을 수행한다
-		// Shoulder length 경우, 가로 길이이기 때문에 따로 처리 필요
-		if (i == Height && thisLandmark->GetSegments().empty()) {
-			for (int i = 0; i < Bone_Num; i++)
-				thisLandmark->SetSegment(i);
-		}
-		if (i == ArmLengthR && thisLandmark->GetSegments().empty()) {
-			// thisLandmark->SetSegment(Bone_shoulderR);
-			thisLandmark->SetSegment(Bone_upperArmR);
-			thisLandmark->SetSegment(Bone_upperArm1R);
-			thisLandmark->SetSegment(Bone_lowerArmR);
-			thisLandmark->SetSegment(Bone_lowerArm1R);
-			/*
-			thisLandmark->SetSegment(Bone_lowerArm2R);
-			*/
-		}
-		if (i == ArmLengthL && thisLandmark->GetSegments().empty()) {
-			thisLandmark->SetSegment(Bone_upperArmL);
-			thisLandmark->SetSegment(Bone_upperArm1L);
-			thisLandmark->SetSegment(Bone_lowerArmL);
-			thisLandmark->SetSegment(Bone_lowerArm1L);
-			thisLandmark->SetSegment(Bone_lowerArm2L);
-		}
-		if (i == LegLengthR && thisLandmark->GetSegments().empty()) {
-			thisLandmark->SetSegment(Bone_hipR);
-			thisLandmark->SetSegment(Bone_upperLegR);
-			thisLandmark->SetSegment(Bone_upperLeg1R);
-			thisLandmark->SetSegment(Bone_lowerLegR);
-		}
-		if (i == LegLengthL && thisLandmark->GetSegments().empty()) {
-			thisLandmark->SetSegment(Bone_hipL);
-			thisLandmark->SetSegment(Bone_upperLegL);
-			thisLandmark->SetSegment(Bone_upperLeg1L);
-			thisLandmark->SetSegment(Bone_lowerLegL);
-		}
-		if (i == ShoulderLength && thisLandmark->GetSegments().empty()) {
-			thisLandmark->SetSegment(Bone_neck);
-			thisLandmark->SetSegment(Bone_spine3);
-			thisLandmark->SetSegment(Bone_spine2);
-			thisLandmark->SetSegment(Bone_spine1);
-			thisLandmark->SetSegment(Bone_spine);
-			thisLandmark->SetSegment(Bone_waist);
-
-			thisLandmark->SetSegment(Bone_collarboneR);
-			thisLandmark->SetSegment(Bone_shoulderR);
-			
-			thisLandmark->SetSegment(Bone_collarboneL);
-			thisLandmark->SetSegment(Bone_shoulderL);
-			// ToDo::Shoulder length sizing의 경우에도 joint position이 업데이트 되어야 한다
-		}
-
-		thisLandmark->Deform(value);
 	}
 
 	// Update Joint positions (for Bust && shoulder length)
@@ -2958,7 +3116,15 @@ void HumanObject::SetSize(int i, float value) {
 // @param[in] lname : 이름이 lname인 랜드마크
 // @param[in] value : 변형되기를 원하는 치수
 void HumanObject::SetSize(char* lname, float value) {
-
+	if (!strcmp(lname, "Bust")) {
+		SetSize(Bust, value);
+	}
+	else if (!strcmp(lname, "Waist")) {
+		SetSize(Waist, value);
+	}
+	else if (!strcmp(lname, "Hip")) {
+		SetSize(Hip, value);
+	}
 }
 
 
@@ -2972,6 +3138,12 @@ int HumanObject::GetFaceNum() {
 	return m_Faces->size();
 }
 
+// i번째 정점 반환
+// @param
+// i [in] :: 정점의 인덱스
+mjVertex* HumanObject::GetVert(int i) {
+	return (*m_Vertices)[i];
+}
 
 // i번째 정점의 좌표 반환
 // @param
@@ -3017,17 +3189,48 @@ void HumanObject::GetIndices(int *node) {
 }
 
 
-
 /////// Bounding / Collision
 // 지정된 이름의 파트번호
 // @ params
 // [in] name
 int HumanObject::GetSegmentNum(char* name) {
-	/*
 	if (!strcmp(name, "Head")) {
-
+		return BodySegment_head;
 	}
-	*/
+	else if (!strcmp(name, "Neck")) {
+		return BodySegment_neck;
+	}
+	else if (!strcmp(name, "Torso Upper")) {
+		return BodySegment_torsoUpper;
+	}
+	else if (!strcmp(name, "Torso Lower")) {
+		return BodySegment_torsoLower;
+	}
+	else if (!strcmp(name, "Leg Upper R")) {
+		return BodySegment_legUpperR;
+	}
+	else if (!strcmp(name, "Leg Lower R")) {
+		return BodySegment_legLowerR;
+	}
+	else if (!strcmp(name, "Leg Upper L")) {
+		return BodySegment_legUpperL;
+	}
+	else if (!strcmp(name, "Leg Lower L")) {
+		return BodySegment_legLowerL;
+	}
+	else if (!strcmp(name, "Arm Upper R")) {
+		return BodySegment_armUpperR;
+	}
+	else if (!strcmp(name, "Arm Lower R")) {
+		return BodySegment_armLowerR;
+	}
+	else if (!strcmp(name, "Arm Upper L")) {
+		return BodySegment_armUpperL;
+	}
+	else if (!strcmp(name, "Arm Lower L")) {
+		return BodySegment_armLowerL;
+	}
+
 	return 0;
 }
 
@@ -3036,15 +3239,136 @@ int HumanObject::GetSegmentNum(char* name) {
 // [in] i
 // [out] coord
 void HumanObject::GetSegmentOrigin(int i, float* coord) {
+	mjJoint *loc = NULL;
 
+	switch (i) {
+	case BodySegment_head :
+		loc = (*m_Skeleton->m_Bones)[Bone_head]->m_UpperJoint;
+		break;
+
+	case BodySegment_neck :
+		loc = (*m_Skeleton->m_Bones)[Bone_neck]->m_UpperJoint;
+		break;
+
+	case BodySegment_torsoUpper :
+		loc = (*m_Skeleton->m_Bones)[Bone_spine3]->m_UpperJoint;
+		break;
+
+	case BodySegment_torsoLower :
+		loc = (*m_Skeleton->m_Bones)[Bone_waist]->m_UpperJoint;
+		break;
+
+	case BodySegment_legUpperR :
+		loc = (*m_Skeleton->m_Bones)[Bone_hipR]->m_UpperJoint;
+		break;
+
+	case BodySegment_legLowerR :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerLegR]->m_UpperJoint;
+		break;
+
+	case BodySegment_legUpperL :
+		loc = (*m_Skeleton->m_Bones)[Bone_hipL]->m_UpperJoint;
+		break;
+
+	case BodySegment_legLowerL :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerLegL]->m_UpperJoint;
+		break;
+
+	case BodySegment_armUpperR :
+		loc = (*m_Skeleton->m_Bones)[Bone_upperArmR]->m_UpperJoint;
+		break;
+
+	case BodySegment_armLowerR :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerArmR]->m_UpperJoint;
+		break;
+
+	case BodySegment_armUpperL :
+		loc = (*m_Skeleton->m_Bones)[Bone_upperArmL]->m_UpperJoint;
+		break;
+
+	case BodySegment_armLowerL :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerArmL]->m_UpperJoint;
+	break;
+
+	default:
+		break;
+	}
+
+	coord[0] = loc->m_Coord->x;
+	coord[1] = loc->m_Coord->y;
+	coord[2] = loc->m_Coord->z;
 }
 
 // i번째 부위의 종점 좌표
 // @ params
 // [in] i
 // [out] coord
-void HumanObject::GetSegmentTermination(int i, float* coord) {
+void HumanObject::GetSegmentEnd(int i, float* coord) {
+	mjJoint *loc = NULL;
 
+	switch (i) {
+	case BodySegment_head :
+		loc = (*m_Skeleton->m_Bones)[Bone_head]->m_LowerJoint;
+		break;
+
+	case BodySegment_neck :
+		loc = (*m_Skeleton->m_Bones)[Bone_neck]->m_LowerJoint;
+		break;
+
+	case BodySegment_torsoUpper :
+		loc = (*m_Skeleton->m_Bones)[Bone_spine3]->m_LowerJoint;
+		break;
+
+	case BodySegment_torsoLower :
+		loc = (*m_Skeleton->m_Bones)[Bone_waist]->m_LowerJoint;
+		break;
+
+	case BodySegment_legUpperR :
+		loc = (*m_Skeleton->m_Bones)[Bone_hipR]->m_LowerJoint;
+		break;
+
+	case BodySegment_legLowerR :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerLegR]->m_LowerJoint;
+		break;
+
+	case BodySegment_legUpperL :
+		loc = (*m_Skeleton->m_Bones)[Bone_hipL]->m_LowerJoint;
+		break;
+
+	case BodySegment_legLowerL :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerLegL]->m_LowerJoint;
+		break;
+
+	case BodySegment_armUpperR :
+		loc = (*m_Skeleton->m_Bones)[Bone_upperArmR]->m_LowerJoint;
+		break;
+
+	case BodySegment_armLowerR :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerArmR]->m_LowerJoint;
+		break;
+
+	case BodySegment_armUpperL :
+		loc = (*m_Skeleton->m_Bones)[Bone_upperArmL]->m_LowerJoint;
+		break;
+
+	case BodySegment_armLowerL :
+		loc = (*m_Skeleton->m_Bones)[Bone_lowerArmL]->m_LowerJoint;
+	break;
+
+	default:
+		break;
+	}
+
+	coord[0] = loc->m_Coord->x;
+	coord[1] = loc->m_Coord->y;
+	coord[2] = loc->m_Coord->z;
+}
+
+// i번째 부위의 vertex들의 갯수
+// @ params
+// [in] i
+int HumanObject::GetSegmentSize(int i) {
+	return m_BodySegment[i].size();
 }
 
 // i번째 부위에 속한 vertex들의 indices
@@ -3052,7 +3376,8 @@ void HumanObject::GetSegmentTermination(int i, float* coord) {
 // [in] i
 // [out] nums
 void HumanObject::GetSegmentVertIndices(int i, int* nums) {
-
+	for (int j = 0; j < m_BodySegment[i].size(); j++)
+		nums[j] = m_BodySegment[i][j]->m_Idx;
 }
 
 // i번째 부위에 속한 vertex들의 좌표들
@@ -3060,6 +3385,11 @@ void HumanObject::GetSegmentVertIndices(int i, int* nums) {
 // [in] i
 // [out] coord
 void HumanObject::GetSegmentVertPos(int i, float* coord) {
+	for (int j = 0; j < m_BodySegment[i].size(); j += 3) {
+		coord[j] = m_BodySegment[i][j]->m_Coord->x;
+		coord[j + 1] = m_BodySegment[i][j]->m_Coord->y;
+		coord[j + 2] = m_BodySegment[i][j]->m_Coord->z;
+	}
 
 }
 
